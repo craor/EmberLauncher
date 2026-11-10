@@ -25,18 +25,24 @@ def main() -> None:
         "--windowed",
         "--name",
         "EmberLauncher",
-        "--icon",
-        "icon.ico",
+    ]
+    if sys.platform == "darwin":
+        command.extend(["--icon", "icon.icns"])
+    elif os.name == "nt":
+        command.extend(["--icon", "icon.ico"])
+    command.extend([
         "--add-data",
         f"icon.ico{sep}.",
         "--add-data",
         f"icon.png{sep}.",
+        "--add-data",
+        f"ember_src{sep}ember_src",
         "--collect-all",
         "minecraft_launcher_lib",
         "--collect-all",
         "PyQt6",
         "launcher.py",
-    ]
+    ])
     subprocess.check_call(command, cwd=ROOT)
     dist = ROOT / "dist"
     if sys.platform == "darwin":
