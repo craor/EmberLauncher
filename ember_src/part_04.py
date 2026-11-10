@@ -143,6 +143,11 @@ class LauncherWindow(GradientWindow):
         for button in self._nav:
             side_layout.addWidget(button)
         side_layout.addStretch(1)
+        self.download_stat = QLabel("Скачали лаунчер: …\nОнлайн не считается — нет своего сервера.")
+        self.download_stat.setObjectName("muted")
+        self.download_stat.setWordWrap(True)
+        self.download_stat.setToolTip("Сколько раз скачали файлы лаунчера с GitHub. Сколько окон открыто сейчас, без своего сервера не посчитать.")
+        side_layout.addWidget(self.download_stat)
         side_layout.addWidget(self._section("НИК"))
         self.nick_edit = QComboBox()
         self.nick_edit.setEditable(True)
@@ -216,7 +221,7 @@ class LauncherWindow(GradientWindow):
         versions_layout.addWidget(self._section("ВЕРСИЯ"))
         chip_row = QHBoxLayout()
         chip_row.setSpacing(6)
-        for label in ("1.21.1", "1.21.4", "1.21.11", "1.20.1", "1.16.5", "26.3"):
+        for label in ("1.21.1", "1.21.4", "1.21.11", "1.20.1", "1.19.2", "26.3"):
             chip = EmberButton(label)
             chip.setShrinkable(True)
             chip.clicked.connect(lambda text=label: self.target_edit.setText(text))
@@ -225,7 +230,7 @@ class LauncherWindow(GradientWindow):
         versions_layout.addLayout(chip_row)
         new_line = QHBoxLayout()
         self.target_edit = QLineEdit(self._config["target_version"])
-        self.target_edit.setPlaceholderText("1.21.1, 1.20.1 или 26.3")
+        self.target_edit.setPlaceholderText("с 1.19.2: 1.20.1, 1.21.8, 26.3")
         self.target_edit.textChanged.connect(self._sync_chips)
         self.catalog_btn = EmberButton("Каталог")
         self.catalog_btn.setMinimumWidth(100)
@@ -255,8 +260,8 @@ class LauncherWindow(GradientWindow):
         version_actions.addWidget(self.refresh_btn)
         versions_layout.addLayout(version_actions)
         versions_hint = QLabel(
-            "Сначала номер, сразу под ним загрузчик: Fabric, Forge, NeoForge, Quilt или OptiFine. "
-            "Скачается эта пара. Сборки справа ставятся на неё же, не на отдельную 26.3."
+            "Сначала номер, сразу под ним загрузчик. Моды — с 1.19.2 и новее, на любой номер, не только на кнопки. "
+            "Свой запрос пиши справа: животные, военная, магия."
         )
         versions_hint.setObjectName("muted")
         versions_hint.setWordWrap(True)
@@ -390,7 +395,7 @@ class LauncherWindow(GradientWindow):
         self.pack_target = QLabel("Сборка")
         self.pack_target.setObjectName("packTarget")
         self.pack_target.setWordWrap(True)
-        packs_hint = QLabel("Жми набор — моды ищутся на выбранные версию и загрузчик.")
+        packs_hint = QLabel("С 1.19.2 любой запрос, не только кнопки: «много животных», «военная».")
         packs_hint.setObjectName("muted")
         packs_hint.setWordWrap(True)
         right_layout.addWidget(packs_title)
@@ -436,7 +441,7 @@ class LauncherWindow(GradientWindow):
         body_layout.addWidget(self._section("СВОЯ СБОРКА"))
         ask_row = QHBoxLayout()
         self.ask_edit = QLineEdit()
-        self.ask_edit.setPlaceholderText("зомби на 1.21.1")
+        self.ask_edit.setPlaceholderText("много животных на 1.21.1")
         self.ask_edit.returnPressed.connect(self.ask_pack)
         self.ask_btn = EmberButton("Собрать")
         self.ask_btn.setShrinkable(True)
@@ -444,7 +449,7 @@ class LauncherWindow(GradientWindow):
         ask_row.addWidget(self.ask_edit, 1)
         ask_row.addWidget(self.ask_btn)
         body_layout.addLayout(ask_row)
-        self.plan_label = QLabel("Зелёная галка — мод уже стоит. Источники: Modrinth и CurseForge.")
+        self.plan_label = QLabel("Свой текст ищет моды с 1.19.2. Зелёная галка — файл уже лежит в mods.")
         self.plan_label.setObjectName("muted")
         self.plan_label.setWordWrap(True)
         body_layout.addWidget(self.plan_label)
@@ -532,6 +537,7 @@ class LauncherWindow(GradientWindow):
         self._news_worker = worker
         worker.ready.connect(self._on_news)
         worker.failed.connect(self._on_news_failed)
+        worker.downloads.connect(self._on_downloads)
         worker.start()
 
     def _on_news(self, items: object) -> None:
@@ -543,6 +549,12 @@ class LauncherWindow(GradientWindow):
             blocks.append(f"{item.get('version') or 'Релиз'}   {item.get('date') or ''}\n{item.get('body') or ''}")
         self.news_box.setText("\n\n".join(blocks) if blocks else self._fallback_news())
         self._fit_news()
+
+    def _on_downloads(self, count: int) -> None:
+        if count < 0:
+            self.download_stat.setText("Скачали лаунчер: нет сети\nОнлайн не считается — нет своего сервера.")
+            return
+        self.download_stat.setText(f"Скачали лаунчер: {count}\nОнлайн не считается — нет своего сервера.")
 
     def _on_news_failed(self, _message: str) -> None:
         self.news_box.setText(self._fallback_news())
@@ -955,7 +967,7 @@ class LauncherWindow(GradientWindow):
             return
         query = self.ask_edit.text().strip()
         if len(query) < 2:
-            self.plan_label.setText("Напиши, что хочешь: анимации, шейдеры, данжи, оптимизация. Версию можно прямо в тексте.")
+            self.plan_label.setText("Напиши любой запрос с версии 1.19.2: животные, военная, данжи. Версию можно прямо в тексте.")
             return
         loader = loader_from_text(query, self.loader_id())
         if loader in ("vanilla", "optifine"):
