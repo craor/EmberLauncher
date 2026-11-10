@@ -279,6 +279,7 @@ class PackWorker(QThread):
 class NewsWorker(QThread):
     ready = pyqtSignal(list)
     failed = pyqtSignal(str)
+    downloads = pyqtSignal(int)
 
     def __init__(self, repo: str) -> None:
         super().__init__()
@@ -289,8 +290,12 @@ class NewsWorker(QThread):
             notes = github_release_notes(self.repo)
         except Exception as exc:
             self.failed.emit(str(exc))
-            return
-        self.ready.emit(notes)
+        else:
+            self.ready.emit(notes)
+        try:
+            self.downloads.emit(github_download_total(self.repo))
+        except Exception:
+            self.downloads.emit(-1)
 
 
 class UpdateCheckWorker(QThread):
