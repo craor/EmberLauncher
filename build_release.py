@@ -10,6 +10,73 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+_MACHO_MAGIC = {
+    b"\xfe\xed\xfa\xce",
+    b"\xfe\xed\xfa\xcf",
+    b"\xce\xfa\xed\xfe",
+    b"\xcf\xfa\xed\xfe",
+    b"\xca\xfe\xba\xbe",
+    b"\xbe\xba\xfe\xca",
+}
+
+
+def _is_macho(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            return handle.read(4) in _MACHO_MAGIC
+    except OSError:
+        return False
+
+
+def _sign_mac_app(app: Path) -> None:
+    binaries = [path for path in app.rglob("*") if path.is_file() and not path.is_symlink() and _is_macho(path)]
+    binaries.sort(key=lambda path: len(path.parts), reverse=True)
+    for path in binaries:
+        subprocess.check_call(["codesign", "--force", "--sign", "-", str(path)], cwd=ROOT)
+    subprocess.check_call(["codesign", "--force", "--sign", "-", str(app)], cwd=ROOT)
+    subprocess.check_call(["codesign", "--verify", "--deep", "--strict", str(app)], cwd=ROOT)
+
+
+def _write_mac_dmg(app: Path, dist: Path) -> Path:
+    staging = dist / "dmg-root"
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir()
+    subprocess.check_call(["ditto", str(app), str(staging / "EmberLauncher.app")])
+    os.symlink("/Applications", staging / "Applications")
+    (staging / "Как открыть.txt").write_text(
+        "Ember для Mac с чипом Apple (M1 и новее). На Intel не запустится.\n"
+        "\n"
+        "1. Перетащи EmberLauncher в папку «Программы» слева.\n"
+        "2. Открой «Программы», нажми EmberLauncher правой кнопкой и выбери «Открыть».\n"
+        "3. Если система пишет про неизвестного разработчика — ещё раз «Открыть».\n"
+        "4. Первый запуск спросит папку. Ярлык Ember появится на рабочем столе.\n"
+        "\n"
+        "Не запускай программу прямо из этого окна: macOS прячет такие файлы, и окно не появляется.\n"
+        "Сборка без сертификата Apple.\n",
+        encoding="utf-8",
+    )
+    _sign_mac_app(staging / "EmberLauncher.app")
+    archive = dist / "EmberLauncher-macOS.dmg"
+    if archive.exists():
+        archive.unlink()
+    subprocess.check_call(
+        [
+            "hdiutil",
+            "create",
+            "-volname",
+            "Ember",
+            "-srcfolder",
+            str(staging),
+            "-ov",
+            "-format",
+            "UDZO",
+            str(archive),
+        ],
+        cwd=ROOT,
+    )
+    shutil.rmtree(staging)
+    return archive
 
 
 def main() -> None:
@@ -21,15 +88,16 @@ def main() -> None:
         "PyInstaller",
         "--noconfirm",
         "--clean",
-        "--onefile",
         "--windowed",
         "--name",
         "EmberLauncher",
     ]
     if sys.platform == "darwin":
-        command.extend(["--icon", "icon.icns"])
-    elif os.name == "nt":
-        command.extend(["--icon", "icon.ico"])
+        command.extend(["--icon", "icon.icns", "--osx-bundle-identifier", "ember.launcher"])
+    else:
+        command.append("--onefile")
+        if os.name == "nt":
+            command.extend(["--icon", "icon.ico"])
     command.extend([
         "--add-data",
         f"icon.ico{sep}.",
@@ -46,10 +114,7 @@ def main() -> None:
     subprocess.check_call(command, cwd=ROOT)
     dist = ROOT / "dist"
     if sys.platform == "darwin":
-        app = dist / "EmberLauncher.app"
-        archive = dist / "EmberLauncher-macOS.zip"
-        subprocess.check_call(["ditto", "-c", "-k", "--keepParent", str(app), str(archive)])
-        print(archive)
+        print(_write_mac_dmg(dist / "EmberLauncher.app", dist))
         return
     if os.name == "nt":
         print(dist / "EmberLauncher.exe")

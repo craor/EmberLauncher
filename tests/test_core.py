@@ -107,6 +107,9 @@ def main() -> None:
     assert disabled == ["Waystones-1.2.jar"], disabled
     assert "библиотек" in note.lower() or "waystones" in note.lower()
     assert not (mods / "Waystones-1.2.jar").is_file()
+    assert launcher.update_payload_ok(b"xxxx", b"koly", "darwin")
+    assert not launcher.update_payload_ok(b"PK\x03\x04", b"", "darwin")
+    assert launcher.update_payload_ok(b"\x7fELF", b"", "linux")
     print("ok")
 
 

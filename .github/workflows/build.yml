@@ -23,7 +23,7 @@ jobs:
       - name: Install
         run: pip install -r requirements.txt
       - name: Compile
-        run: python -m py_compile launcher.py build_release.py make_icon.py tests/test_core.py ember_src/part_01.py ember_src/part_01b.py ember_src/part_01c.py ember_src/part_02.py ember_src/part_03.py ember_src/part_04.py ember_src/part_05.py
+        run: python -m py_compile launcher.py build_release.py make_icon.py tests/test_core.py ember_src/part_01.py ember_src/part_01b.py ember_src/part_01c.py ember_src/part_02.py ember_src/part_02b.py ember_src/part_03.py ember_src/part_04.py ember_src/part_05.py
       - name: Safety checks
         env:
           QT_QPA_PLATFORM: offscreen
@@ -40,7 +40,7 @@ jobs:
           - os: ubuntu-22.04
             artifact: EmberLauncher-linux
           - os: macos-15
-            artifact: EmberLauncher-macOS.zip
+            artifact: EmberLauncher-macOS.dmg
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -87,6 +87,6 @@ jobs:
           gh release create "$TAG" \
             "artifacts/EmberLauncher.exe/EmberLauncher.exe" \
             "artifacts/EmberLauncher-linux/EmberLauncher-linux" \
-            "artifacts/EmberLauncher-macOS.zip/EmberLauncher-macOS.zip" \
+            "artifacts/EmberLauncher-macOS.dmg/EmberLauncher-macOS.dmg" \
             --title "$TAG" \
-            --notes "Windows 10/11, Linux и macOS. Автор craor."
+            --notes "Windows 10/11, Linux и macOS (DMG, чип Apple). Автор craor."

@@ -14,13 +14,13 @@
 | --- | --- |
 | Windows 10 и Windows 11 (64-bit) | `EmberLauncher.exe` |
 | Linux x64, Ubuntu 22.04 и новее | `EmberLauncher-linux` |
-| MacBook на Apple silicon (M1 и новее) | `EmberLauncher-macOS.zip` |
+| MacBook на Apple silicon (M1 и новее) | `EmberLauncher-macOS.dmg` |
 
 Windows 10 и 11 используют один exe. Отдельной сборки под каждую из них нет: программа одна.
 
 Первый запуск спрашивает папку и кладёт ярлык Ember на рабочий стол. Повторный запуск ярлыка открывает лаунчер сразу.
 
-На Linux после скачивания: `chmod +x EmberLauncher-linux`. На Mac распакуй zip и открой `EmberLauncher.app`. Если macOS ругается на неизвестного разработчика, в настройках безопасности нажми «Открыть всё равно». Сборка не подписана сертификатом Apple.
+На Linux после скачивания: `chmod +x EmberLauncher-linux`. На Mac открой `EmberLauncher-macOS.dmg`, перетащи EmberLauncher в «Программы» и открой его оттуда правой кнопкой → «Открыть». Из окна диска или из zip программа молча не стартует: macOS прячет скачанные приложения. Сборка без сертификата Apple, на Intel её нет.
 
 ## Запуск из исходников
 
