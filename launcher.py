@@ -4,7 +4,7 @@
     python launcher.py
 
 Код программы лежит в ember_src/part_*.py и выполняется в этом модуле.
-Версию меняй здесь: от неё зависит автообновление.
+Версию меняй здесь: от нёё зависит автообновление.
 """
 
 from __future__ import annotations
@@ -92,8 +92,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-APP_VERSION = "1.8.2"
-USER_AGENT = "EmberLauncher/1.8.2"
+APP_VERSION = "1.8.3"
+USER_AGENT = "EmberLauncher/1.8.3"
 AUTHOR = "craor"
 DEFAULT_UPDATE_REPO = "craor/EmberLauncher"
 
