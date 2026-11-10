@@ -1,94 +1,82 @@
 
 
 class StageBanner(QWidget):
-    """Центральная сцена: закат и блочные фигурки, без чужих скинов."""
+    """Центральная сцена: картинка, которую выбрал игрок."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setMinimumHeight(220)
-        self.setMaximumHeight(260)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.addStretch(1)
-        card = QFrame()
-        card.setObjectName("hubCard")
-        card.setFixedWidth(230)
-        column = QVBoxLayout(card)
-        column.setContentsMargins(14, 12, 14, 12)
-        kicker = QLabel("EMBER")
-        kicker.setObjectName("kicker")
-        self.caption = QLabel("Выбери версию")
-        self.caption.setObjectName("hubTitle")
-        self.caption.setWordWrap(True)
-        self.detail = QLabel("Потом жми «Играть». Сборки справа.")
-        self.detail.setObjectName("hubBody")
-        self.detail.setWordWrap(True)
-        column.addWidget(kicker)
-        column.addWidget(self.caption)
-        column.addWidget(self.detail)
-        column.addStretch(1)
-        layout.addWidget(card)
+        self.setMinimumHeight(248)
+        self.setMaximumHeight(340)
+        self._art = stage_pixmap()
+        self._version = "Выбери версию"
+        self._detail = "Описание появится здесь."
 
-    def set_caption(self, version: str, loader: str) -> None:
-        self.caption.setText(version or "Нет версии")
-        self.detail.setText(f"{loader or 'Vanilla'}. Сборки — на правой панели.")
+    def set_caption(self, version: str, detail: str) -> None:
+        self._version = version or "Нет версии"
+        self._detail = detail or ""
+        self.update()
 
     def paintEvent(self, event) -> None:
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         rect = QRectF(self.rect().adjusted(1, 1, -2, -2))
         clip = QPainterPath()
         clip.addRoundedRect(rect, 18, 18)
         painter.setClipPath(clip)
-        sky = QLinearGradient(rect.topLeft(), rect.bottomRight())
-        sky.setColorAt(0.0, QColor(16, 36, 58))
-        sky.setColorAt(0.45, QColor(48, 28, 22))
-        sky.setColorAt(1.0, QColor(255, 112, 32))
-        painter.fillPath(clip, sky)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(255, 196, 110, 230))
-        painter.drawEllipse(QPointF(rect.right() - 86, rect.top() + 48), 34, 34)
-        painter.setBrush(QColor(255, 140, 50, 50))
-        painter.drawEllipse(QPointF(rect.right() - 86, rect.top() + 48), 58, 58)
-        ground_top = rect.bottom() - 58
-        painter.setBrush(QColor(46, 92, 42))
-        painter.drawRect(QRectF(rect.left(), ground_top, rect.width(), 58))
-        painter.setBrush(QColor(62, 122, 48))
-        painter.drawRect(QRectF(rect.left(), ground_top, rect.width(), 10))
-        self._block_player(painter, rect.left() + 78, ground_top, QColor("#3f8fd2"), QColor("#c48a56"), QColor("#24356f"))
-        self._block_player(painter, rect.left() + 168, ground_top, QColor("#e07a32"), QColor("#e8c07a"), QColor("#5a4632"))
-        self._creeper(painter, rect.left() + 250, ground_top)
+        if self._art.isNull():
+            sky = QLinearGradient(rect.topLeft(), rect.bottomRight())
+            sky.setColorAt(0.0, QColor(48, 24, 12))
+            sky.setColorAt(1.0, QColor(255, 112, 32))
+            painter.fillPath(clip, sky)
+        else:
+            scaled = self._art.scaled(
+                max(1, int(rect.width())),
+                max(1, int(rect.height())),
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            x = int(rect.left() + (rect.width() - scaled.width()) / 2)
+            y = int(rect.top() + (rect.height() - scaled.height()) / 2)
+            painter.drawPixmap(x, y, scaled)
+        scrim = QLinearGradient(rect.bottomLeft(), QPointF(rect.left(), rect.bottom() - 86))
+        scrim.setColorAt(0.0, QColor(12, 8, 6, 220))
+        scrim.setColorAt(1.0, QColor(12, 8, 6, 0))
+        painter.fillRect(QRectF(rect.left(), rect.bottom() - 86, rect.width(), 86), scrim)
+        painter.setPen(QColor("#ffe7c4"))
+        painter.setFont(QFont("Segoe UI", 15, QFont.Weight.Bold))
+        painter.drawText(
+            QRectF(rect.left() + 16, rect.bottom() - 58, rect.width() - 32, 24),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            self._version,
+        )
+        painter.setPen(QColor("#f6e6d4"))
+        painter.setFont(QFont("Segoe UI", 10))
+        detail = QFontMetrics(painter.font()).elidedText(
+            self._detail, Qt.TextElideMode.ElideRight, max(8, int(rect.width()) - 36)
+        )
+        painter.drawText(
+            QRectF(rect.left() + 16, rect.bottom() - 32, rect.width() - 32, 20),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            detail,
+        )
         painter.setClipping(False)
-        painter.setPen(QPen(QColor(255, 186, 110, 90), 1.2))
+        painter.setPen(QPen(QColor(255, 186, 110, 120), 1.2))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(rect, 18, 18)
         painter.end()
 
-    def _block_player(self, painter: QPainter, x: float, ground: float, shirt: QColor, skin: QColor, pants: QColor) -> None:
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(pants)
-        painter.drawRect(QRectF(x + 6, ground - 28, 10, 28))
-        painter.drawRect(QRectF(x + 20, ground - 28, 10, 28))
-        painter.setBrush(shirt)
-        painter.drawRect(QRectF(x + 4, ground - 58, 28, 30))
-        painter.setBrush(skin)
-        painter.drawRect(QRectF(x - 4, ground - 50, 8, 22))
-        painter.drawRect(QRectF(x + 32, ground - 50, 8, 22))
-        painter.drawRect(QRectF(x + 6, ground - 78, 24, 22))
-        painter.setBrush(QColor(20, 16, 14))
-        painter.drawRect(QRectF(x + 9, ground - 72, 18, 6))
 
-    def _creeper(self, painter: QPainter, x: float, ground: float) -> None:
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#3f9a45"))
-        painter.drawRect(QRectF(x + 6, ground - 22, 8, 22))
-        painter.drawRect(QRectF(x + 22, ground - 22, 8, 22))
-        painter.drawRect(QRectF(x, ground - 62, 36, 42))
-        painter.setBrush(QColor("#163218"))
-        painter.drawRect(QRectF(x + 8, ground - 52, 6, 8))
-        painter.drawRect(QRectF(x + 22, ground - 52, 6, 8))
-        painter.drawRect(QRectF(x + 14, ground - 40, 8, 10))
+def stage_pixmap() -> QPixmap:
+    pixmap = QPixmap()
+    path = _bundle_root() / "ember_src" / "stage.b64"
+    try:
+        encoded = "".join(path.read_text(encoding="ascii").split())
+        pixmap.loadFromData(base64.b64decode(encoded), "JPG")
+    except (OSError, ValueError):
+        return QPixmap()
+    return pixmap
 
 
 class LauncherWindow(GradientWindow):
@@ -109,6 +97,9 @@ class LauncherWindow(GradientWindow):
         self._faded = False
         self._update_manual = False
         self._pack_btns: list[EmberButton] = []
+        self._version_chips: list[EmberButton] = []
+        self._news_worker: QThread | None = None
+        self._profile_synced = False
 
         root = QHBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
@@ -143,10 +134,12 @@ class LauncherWindow(GradientWindow):
         self.nav_home = EmberButton("Игра", nav=True)
         self.nav_versions = EmberButton("Версии", nav=True)
         self.nav_setup = EmberButton("Установка", nav=True)
-        self._nav = (self.nav_home, self.nav_versions, self.nav_setup)
+        self.nav_news = EmberButton("Новости", nav=True)
+        self._nav = (self.nav_home, self.nav_versions, self.nav_setup, self.nav_news)
         self.nav_home.clicked.connect(lambda: self._show_page(0))
         self.nav_versions.clicked.connect(lambda: self._show_page(1))
         self.nav_setup.clicked.connect(lambda: self._show_page(2))
+        self.nav_news.clicked.connect(lambda: self._show_page(3))
         for button in self._nav:
             side_layout.addWidget(button)
         side_layout.addStretch(1)
@@ -201,15 +194,46 @@ class LauncherWindow(GradientWindow):
         home_layout.setSpacing(10)
         self.stage = StageBanner()
         home_layout.addWidget(self.stage)
-        pick_row = QHBoxLayout()
-        play_col = QVBoxLayout()
-        play_col.addWidget(self._section("ЧТО ЗАПУСКАТЬ"))
+        home_layout.addWidget(self._section("ЧТО ЗАПУСКАТЬ"))
         self.version_combo = QComboBox()
         self.version_combo.setMaxVisibleItems(14)
+        self.version_combo.currentTextChanged.connect(self._apply_profile_target)
         self.version_combo.currentTextChanged.connect(self._sync_chips)
-        play_col.addWidget(self.version_combo)
-        loader_col = QVBoxLayout()
-        loader_col.addWidget(self._section("ЗАГРУЗЧИК"))
+        home_layout.addWidget(self.version_combo)
+        self.version_about = QLabel("Здесь будет описание выбранной версии.")
+        self.version_about.setObjectName("muted")
+        self.version_about.setWordWrap(True)
+        home_layout.addWidget(self.version_about)
+        other = EmberButton("Скачать другую версию")
+        other.clicked.connect(lambda: self._show_page(1))
+        home_layout.addWidget(other)
+        home_layout.addStretch(1)
+
+        versions = QWidget()
+        versions_layout = QVBoxLayout(versions)
+        versions_layout.setContentsMargins(0, 4, 0, 0)
+        versions_layout.setSpacing(8)
+        versions_layout.addWidget(self._section("ВЕРСИЯ"))
+        chip_row = QHBoxLayout()
+        chip_row.setSpacing(6)
+        for label in ("1.21.1", "1.21.4", "1.21.11", "1.20.1", "1.16.5", "26.3"):
+            chip = EmberButton(label)
+            chip.setShrinkable(True)
+            chip.clicked.connect(lambda text=label: self.target_edit.setText(text))
+            self._version_chips.append(chip)
+            chip_row.addWidget(chip)
+        versions_layout.addLayout(chip_row)
+        new_line = QHBoxLayout()
+        self.target_edit = QLineEdit(self._config["target_version"])
+        self.target_edit.setPlaceholderText("1.21.1, 1.20.1 или 26.3")
+        self.target_edit.textChanged.connect(self._sync_chips)
+        self.catalog_btn = EmberButton("Каталог")
+        self.catalog_btn.setMinimumWidth(100)
+        self.catalog_btn.clicked.connect(self.pick_version)
+        new_line.addWidget(self.target_edit, 1)
+        new_line.addWidget(self.catalog_btn)
+        versions_layout.addLayout(new_line)
+        versions_layout.addWidget(self._section("ЗАГРУЗЧИК"))
         self.loader_combo = QComboBox()
         for loader_id, label in LOADERS:
             self.loader_combo.addItem(label, loader_id)
@@ -217,29 +241,11 @@ class LauncherWindow(GradientWindow):
         if saved >= 0:
             self.loader_combo.setCurrentIndex(saved)
         self.loader_combo.currentTextChanged.connect(self._sync_chips)
-        loader_col.addWidget(self.loader_combo)
-        pick_row.addLayout(play_col, 1)
-        pick_row.addLayout(loader_col, 1)
-        home_layout.addLayout(pick_row)
-        recent = EmberButton("Последние версии")
-        recent.clicked.connect(lambda: self._show_page(1))
-        home_layout.addWidget(recent)
-        home_layout.addStretch(1)
-
-        versions = QWidget()
-        versions_layout = QVBoxLayout(versions)
-        versions_layout.setContentsMargins(0, 4, 0, 0)
-        versions_layout.setSpacing(8)
-        versions_layout.addWidget(self._section("НОВАЯ ВЕРСИЯ"))
-        new_line = QHBoxLayout()
-        self.target_edit = QLineEdit(self._config["target_version"])
-        self.target_edit.setPlaceholderText("26.3 или 1.21.1")
-        self.catalog_btn = EmberButton("Каталог")
-        self.catalog_btn.setMinimumWidth(100)
-        self.catalog_btn.clicked.connect(self.pick_version)
-        new_line.addWidget(self.target_edit, 1)
-        new_line.addWidget(self.catalog_btn)
-        versions_layout.addLayout(new_line)
+        versions_layout.addWidget(self.loader_combo)
+        self.loader_about = QLabel("")
+        self.loader_about.setObjectName("muted")
+        self.loader_about.setWordWrap(True)
+        versions_layout.addWidget(self.loader_about)
         version_actions = QHBoxLayout()
         self.download_btn = EmberButton("Скачать", primary=True)
         self.download_btn.clicked.connect(self.download_version)
@@ -248,7 +254,10 @@ class LauncherWindow(GradientWindow):
         version_actions.addWidget(self.download_btn, 1)
         version_actions.addWidget(self.refresh_btn)
         versions_layout.addLayout(version_actions)
-        versions_hint = QLabel("Скачанная версия появится в списке на экране «Игра». Сборку для неё собирай справа.")
+        versions_hint = QLabel(
+            "Сначала номер, сразу под ним загрузчик: Fabric, Forge, NeoForge, Quilt или OptiFine. "
+            "Скачается эта пара. Сборки справа ставятся на неё же, не на отдельную 26.3."
+        )
         versions_hint.setObjectName("muted")
         versions_hint.setWordWrap(True)
         versions_layout.addWidget(versions_hint)
@@ -310,9 +319,32 @@ class LauncherWindow(GradientWindow):
         setup_layout.addLayout(dir_row)
         setup_layout.addStretch(1)
 
+        news = QWidget()
+        news_layout = QVBoxLayout(news)
+        news_layout.setContentsMargins(0, 4, 0, 0)
+        news_layout.setSpacing(8)
+        news_layout.addWidget(self._section("НОВОСТИ"))
+        news_hint = QLabel("Релизы Ember с GitHub. Игра отсюда не обновляется — для этого кнопка «Обновление».")
+        news_hint.setObjectName("muted")
+        news_hint.setWordWrap(True)
+        news_layout.addWidget(news_hint)
+        news_scroll = QScrollArea()
+        news_scroll.setWidgetResizable(True)
+        news_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        news_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.news_box = QLabel("Открываю новости…")
+        self.news_box.setObjectName("newsBody")
+        self.news_box.setWordWrap(True)
+        self.news_box.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.news_box.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.news_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        news_scroll.setWidget(self.news_box)
+        news_layout.addWidget(news_scroll, 1)
+
         self.pages.addWidget(home)
         self.pages.addWidget(versions)
         self.pages.addWidget(setup)
+        self.pages.addWidget(news)
         center_layout.addWidget(self.pages, 1)
 
         self.progress = QProgressBar()
@@ -355,25 +387,36 @@ class LauncherWindow(GradientWindow):
         right_layout.setSpacing(8)
         packs_title = QLabel("СБОРКИ")
         packs_title.setObjectName("kicker")
-        packs_hint = QLabel("Готовые наборы. Жми карточку — моды найдутся сами.")
+        self.pack_target = QLabel("Сборка")
+        self.pack_target.setObjectName("packTarget")
+        self.pack_target.setWordWrap(True)
+        packs_hint = QLabel("Жми набор — моды ищутся на выбранные версию и загрузчик.")
         packs_hint.setObjectName("muted")
         packs_hint.setWordWrap(True)
         right_layout.addWidget(packs_title)
+        right_layout.addWidget(self.pack_target)
         right_layout.addWidget(packs_hint)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         body = QWidget()
         body.setObjectName("scrollBody")
+        body.setMinimumWidth(0)
+        body.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(0, 0, 4, 0)
         body_layout.setSpacing(8)
         grid_host = QWidget()
+        grid_host.setMinimumWidth(0)
         grid = QGridLayout(grid_host)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(8)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
         short_names = {
             "visual": "Визуал",
             "zombie": "Зомби",
@@ -384,6 +427,7 @@ class LauncherWindow(GradientWindow):
         }
         for index, pack in enumerate(PRESETS):
             button = EmberButton(short_names.get(pack["id"], pack["title"]))
+            button.setShrinkable(True)
             button.setToolTip(pack["summary"])
             button.clicked.connect(lambda preset_id=pack["id"]: self._quick_pack(preset_id))
             self._pack_btns.append(button)
@@ -392,37 +436,41 @@ class LauncherWindow(GradientWindow):
         body_layout.addWidget(self._section("СВОЯ СБОРКА"))
         ask_row = QHBoxLayout()
         self.ask_edit = QLineEdit()
-        self.ask_edit.setPlaceholderText("зомби выживание на 26.3")
+        self.ask_edit.setPlaceholderText("зомби на 1.21.1")
         self.ask_edit.returnPressed.connect(self.ask_pack)
         self.ask_btn = EmberButton("Собрать")
+        self.ask_btn.setShrinkable(True)
         self.ask_btn.clicked.connect(self.ask_pack)
         ask_row.addWidget(self.ask_edit, 1)
         ask_row.addWidget(self.ask_btn)
         body_layout.addLayout(ask_row)
-        self.plan_label = QLabel("Зелёная галка значит, что мод уже стоит. Источники: Modrinth и CurseForge.")
+        self.plan_label = QLabel("Зелёная галка — мод уже стоит. Источники: Modrinth и CurseForge.")
         self.plan_label.setObjectName("muted")
         self.plan_label.setWordWrap(True)
         body_layout.addWidget(self.plan_label)
         self.mod_list = QListWidget()
-        self.mod_list.setMinimumHeight(150)
+        self.mod_list.setMinimumHeight(120)
+        self.mod_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self.mod_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         self.mod_list.setItemDelegate(ModListDelegate(self.mod_list))
         body_layout.addWidget(self.mod_list)
-        self.install_loader_check = QCheckBox("Если загрузчика нет — поставить его на эту же версию")
+        self.install_loader_check = QCheckBox("Поставить загрузчик, если его ещё нет")
         self.install_loader_check.setChecked(True)
         body_layout.addWidget(self.install_loader_check)
-        choice = QHBoxLayout()
-        self.skip_pack_btn = EmberButton("Не ставить")
-        self.skip_pack_btn.clicked.connect(self.skip_pack)
-        self.skip_pack_btn.setEnabled(False)
-        self.install_pack_btn = EmberButton("В mods", primary=True)
+        self.install_pack_btn = EmberButton("В папку mods", primary=True)
         self.install_pack_btn.clicked.connect(self.install_pack)
         self.install_pack_btn.setEnabled(False)
+        body_layout.addWidget(self.install_pack_btn)
+        choice = QHBoxLayout()
+        self.skip_pack_btn = EmberButton("Не ставить")
+        self.skip_pack_btn.setShrinkable(True)
+        self.skip_pack_btn.clicked.connect(self.skip_pack)
+        self.skip_pack_btn.setEnabled(False)
         self.packs_btn = EmberButton("Все сборки")
+        self.packs_btn.setShrinkable(True)
         self.packs_btn.clicked.connect(self.open_pack_menu)
         choice.addWidget(self.skip_pack_btn)
         choice.addWidget(self.packs_btn)
-        choice.addWidget(self.install_pack_btn, 1)
         body_layout.addLayout(choice)
         scroll.setWidget(body)
         right_layout.addWidget(scroll, 1)
@@ -463,6 +511,8 @@ class LauncherWindow(GradientWindow):
             self._fade.start()
             QTimer.singleShot(450, lambda: self.setWindowOpacity(1.0))
             QTimer.singleShot(1600, lambda: self.check_for_update(False))
+        if self._news_worker is None:
+            self._load_news()
 
     def _section(self, text: str) -> QLabel:
         label = QLabel(text)
@@ -473,14 +523,125 @@ class LauncherWindow(GradientWindow):
         self.pages.setCurrentIndex(index)
         for button_index, button in enumerate(self._nav):
             button.setSelected(button_index == index)
+        if index == 3 and self._news_worker is None:
+            self._load_news()
+
+    def _load_news(self) -> None:
+        repo = active_update_repo(self._config) or DEFAULT_UPDATE_REPO
+        worker = NewsWorker(repo)
+        self._news_worker = worker
+        worker.ready.connect(self._on_news)
+        worker.failed.connect(self._on_news_failed)
+        worker.start()
+
+    def _on_news(self, items: object) -> None:
+        rows = items if isinstance(items, list) else []
+        blocks: list[str] = []
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            blocks.append(f"{item.get('version') or 'Релиз'}   {item.get('date') or ''}\n{item.get('body') or ''}")
+        self.news_box.setText("\n\n".join(blocks) if blocks else self._fallback_news())
+        self._fit_news()
+
+    def _on_news_failed(self, _message: str) -> None:
+        self.news_box.setText(self._fallback_news())
+        self._fit_news()
+
+    def _fit_news(self) -> None:
+        width = max(220, self.news_box.width())
+        self.news_box.setMinimumHeight(self.news_box.heightForWidth(width) + 8)
+
+    def _fallback_news(self) -> str:
+        return (
+            "Релизы GitHub сейчас не открылись. Кнопка «Обновление» слева качает новую сборку лаунчера.\n\n"
+            "Игра — профиль, который запускается, и описание этой версии.\n"
+            "Версии — номер и загрузчик вместе. Сначала 1.21.1, потом Fabric, Forge или OptiFine, потом «Скачать».\n"
+            "Сборки справа идут на эту же пару. Если написать просто 1.21 и файлов нет, берётся 1.21.1."
+        )
+
+    def _apply_profile_target(self, *_args: object) -> None:
+        version = self.version_combo.currentText().strip()
+        if not version:
+            return
+        release = minecraft_release_from_id(version) or installed_game_version(self.minecraft_dir(), version)
+        if release and self.target_edit.text().strip() != release:
+            self.target_edit.setText(release)
+        low = version.lower()
+        loader = "vanilla"
+        for key in ("neoforge", "fabric", "quilt", "optifine", "forge"):
+            if key in low:
+                loader = key
+                break
+        index = self.loader_combo.findData(loader)
+        if index >= 0 and self.loader_combo.currentIndex() != index:
+            self.loader_combo.setCurrentIndex(index)
 
     def _sync_chips(self, *_args: object) -> None:
         nick = self.nickname() or "Player"
         self.hello.setText(f"ДОБРО ПОЖАЛОВАТЬ, {nick}!")
         self.footer_nick.setText(nick)
-        version = self.version_combo.currentText().strip() or "нет версии"
-        self.footer_version.setText(version)
-        self.stage.set_caption(version, self.loader_combo.currentText())
+        version = self.version_combo.currentText().strip()
+        target = self.target_edit.text().strip()
+        loader_name = self.loader_combo.currentText() or "Vanilla"
+        self.loader_about.setText(LOADER_BLURBS.get(self.loader_id(), ""))
+        self.pack_target.setText(f"Сборки и скачивание: {target or 'версия не выбрана'} · {loader_name}")
+        if not version:
+            self.footer_version.setText("нет версии")
+            self.stage.set_caption("Нет версии", "Открой «Версии», выбери номер и загрузчик.")
+            self.version_about.setText(
+                "Пока ничего не установлено. Во вкладке «Версии» выбери номер, например 1.21.1, "
+                "сразу под ним загрузчик и нажми «Скачать». Потом вернись сюда и жми «Играть»."
+            )
+            return
+        release = minecraft_release_from_id(version) or installed_game_version(self.minecraft_dir(), version) or version
+        low = version.lower()
+        if "neoforge" in low:
+            profile_loader = "NeoForge"
+        elif "fabric" in low:
+            profile_loader = "Fabric"
+        elif "quilt" in low:
+            profile_loader = "Quilt"
+        elif "optifine" in low:
+            profile_loader = "OptiFine"
+        elif "forge" in low:
+            profile_loader = "Forge"
+        else:
+            profile_loader = "Vanilla"
+        blurb = VERSION_BLURBS.get(release, "Установленный профиль. Новую игру качай во вкладке «Версии».")
+        about = f"{release} · {profile_loader}\n{blurb}\nЗапускается профиль «{version}»."
+        if target and release and target != release:
+            about += (
+                f"\nСборки справа сейчас на {target} · {loader_name}. "
+                f"Если моды нужны в этот профиль, поставь {release} во вкладке «Версии»."
+            )
+        self.footer_version.setText(f"{release} · {profile_loader}")
+        self.stage.set_caption(f"{release} · {profile_loader}", blurb)
+        self.version_about.setText(about)
+
+    def _mod_loader(self) -> str:
+        loader = self.loader_id()
+        if loader in ("vanilla", "optifine"):
+            loader = "fabric"
+            index = self.loader_combo.findData("fabric")
+            if index >= 0:
+                self.loader_combo.setCurrentIndex(index)
+            self._set_status("Для модов нужен Fabric, Forge, NeoForge или Quilt. Взял Fabric — смени во вкладке «Версии», если нужен другой.")
+        return loader
+
+    def _pack_version(self, query: str = "") -> str:
+        found = minecraft_release_from_id(query) if query else ""
+        if found:
+            self.target_edit.setText(found)
+            return found
+        typed = self.target_edit.text().strip()
+        if typed:
+            return minecraft_release_from_id(typed) or typed
+        selected = self.version_combo.currentText().strip()
+        detected = installed_game_version(self.minecraft_dir(), selected) if selected else ""
+        version = detected or "1.21.1"
+        self.target_edit.setText(version)
+        return version
 
     def _quick_pack(self, preset_id: str) -> None:
         if self._busy:
@@ -488,17 +649,10 @@ class LauncherWindow(GradientWindow):
         pack = next((item for item in PRESETS if item["id"] == preset_id), None)
         if pack is None:
             return
-        loader = self.loader_id()
-        if loader in ("vanilla", "optifine"):
-            loader = "fabric"
-            index = self.loader_combo.findData("fabric")
-            if index >= 0:
-                self.loader_combo.setCurrentIndex(index)
-        selected = self.version_combo.currentText().strip()
-        version = resolve_pack_version(pack["title"], self.target_edit.text(), selected, self.minecraft_dir())
-        self.target_edit.setText(version)
+        loader = self._mod_loader()
+        version = self._pack_version(pack["title"])
         self.ask_edit.setText(pack["title"])
-        self.plan_label.setText(f"Собираю «{pack['title']}» для {version}…")
+        self.plan_label.setText(f"Собираю «{pack['title']}» для {version} · {loader}…")
         self.mod_list.clear()
         self._plan = None
         self._start_worker(PackWorker(pack["title"], loader, version, pack["id"], ("modrinth", "curseforge")))
@@ -589,7 +743,7 @@ class LauncherWindow(GradientWindow):
             self.java_btn, self.java_auto_btn, self.java_dl_btn, self.catalog_btn, self.ask_btn,
             self.packs_btn, self.save_nick_btn, self.forget_nick_btn, self.settings_btn,
             self.server_card.join_btn, self.server_card.discord_btn, self.server_card.telegram_btn,
-            self.full_btn, self.update_btn, *self._nav, *self._pack_btns,
+            self.full_btn, self.update_btn, *self._nav, *self._pack_btns, *self._version_chips,
         ):
             widget.setEnabled(not busy)
         self.nick_edit.setEnabled(not busy)
@@ -634,6 +788,10 @@ class LauncherWindow(GradientWindow):
             self._worker.setParent(None)
             _ORPHAN_THREADS.append(self._worker)
             self._worker = None
+        if self._news_worker is not None and self._news_worker.isRunning():
+            self._news_worker.setParent(None)
+            _ORPHAN_THREADS.append(self._news_worker)
+            self._news_worker = None
         if self._log_file is not None:
             try:
                 self._log_file.close()
@@ -653,6 +811,11 @@ class LauncherWindow(GradientWindow):
             if index >= 0:
                 self.version_combo.setCurrentIndex(index)
         self.version_combo.blockSignals(False)
+        current = self.version_combo.currentText().strip()
+        if not self._profile_synced or current != previous:
+            self._profile_synced = True
+            self._apply_profile_target()
+        self._sync_chips()
         if versions:
             self._set_status(f"Установлено версий: {len(versions)}.")
         else:
@@ -717,7 +880,7 @@ class LauncherWindow(GradientWindow):
             return
         version = self.target_edit.text().strip()
         if not version:
-            self._set_status("Впиши версию, например 26.3 или 1.20.1, или открой каталог.")
+            self._set_status("Впиши версию, например 1.21.1 или 26.3, или открой каталог.")
             return
         self.persist()
         self._start_worker(InstallWorker(self.loader_id(), version, self.minecraft_dir(), self.java_path()))
@@ -795,15 +958,13 @@ class LauncherWindow(GradientWindow):
             self.plan_label.setText("Напиши, что хочешь: анимации, шейдеры, данжи, оптимизация. Версию можно прямо в тексте.")
             return
         loader = loader_from_text(query, self.loader_id())
+        if loader in ("vanilla", "optifine"):
+            loader = "fabric"
         loader_index = self.loader_combo.findData(loader)
         if loader_index >= 0:
             self.loader_combo.setCurrentIndex(loader_index)
-        if minecraft_release_from_id(query):
-            self.target_edit.setText(minecraft_release_from_id(query))
-        selected = self.version_combo.currentText().strip()
-        game_version = resolve_pack_version(query, self.target_edit.text(), selected, self.minecraft_dir())
-        self.target_edit.setText(game_version)
-        self.plan_label.setText(f"Смотрю Modrinth и CurseForge для {game_version}…")
+        game_version = self._pack_version(query)
+        self.plan_label.setText(f"Смотрю Modrinth и CurseForge для {game_version} · {loader}…")
         self.mod_list.clear()
         self._plan = None
         self._start_worker(PackWorker(query, loader, game_version))
@@ -931,11 +1092,13 @@ class LauncherWindow(GradientWindow):
         if plan["install_loader"]:
             note = (
                 f" Загрузчика {plan['loader']} на {plan['game_version']} в выбранной версии не видно. "
-                "Галка ниже поставит его на эту же версию, не на 1.21.1."
+                "Галка ниже поставит его на эту же версию."
             )
         else:
             note = f" Моды встанут в {plan['game_version']} без переустановки игры."
         self._plan = plan
+        if plan.get("game_version"):
+            self.target_edit.setText(str(plan["game_version"]))
         self._fill_mod_list(plan.get("mods") or [])
         installed_count = sum(1 for mod in plan.get("mods") or [] if mod.get("installed"))
         if installed_count:

@@ -102,7 +102,12 @@ QLabel#chip {
     color: #ffe7c4;
     font-weight: 700;
 }
-QLabel#hubTitle { color: #fff4e4; font-size: 16px; font-weight: 800; }
+QLabel#packTarget {
+    color: #ffe7c4;
+    font-size: 13px;
+    font-weight: 700;
+}
+QLabel#newsBody { color: #f4f1ea; font-size: 13px; }
 QLabel#hubBody { color: #f4e2cc; font-size: 12px; }
 QFrame#sideBar, QFrame#sidePanel, QFrame#centerCard {
     background-color: rgba(10, 14, 12, 196);

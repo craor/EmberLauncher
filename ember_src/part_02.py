@@ -532,6 +532,31 @@ def github_update(repo: str, current: str) -> dict | None:
     }
 
 
+def github_release_notes(repo: str) -> list[dict]:
+    cleaned = clean_repo(repo)
+    if not cleaned or "/" not in cleaned:
+        return []
+    owner, name = cleaned.split("/", 1)
+    url = (
+        "https://api.github.com/repos/"
+        f"{urllib.parse.quote(owner)}/{urllib.parse.quote(name)}/releases?per_page=6"
+    )
+    payload = http_json(url, timeout=20)
+    if not isinstance(payload, list):
+        return []
+    notes: list[dict] = []
+    for item in payload:
+        if not isinstance(item, dict) or item.get("draft") or item.get("prerelease"):
+            continue
+        body = re.sub(r"\s+", " ", str(item.get("body") or "")).strip()
+        notes.append({
+            "version": str(item.get("tag_name") or "").strip(),
+            "date": str(item.get("published_at") or "")[:10],
+            "body": body[:420] or "Обновление лаунчера.",
+        })
+    return notes
+
+
 def verify_update_file(path: str, digest: str) -> None:
     size = os.path.getsize(path)
     if size < MIN_UPDATE_BYTES or size > MAX_DOWNLOAD_BYTES:
@@ -802,6 +827,40 @@ def resolve_project(
     return None
 
 
+def _line_key(version: str) -> tuple | None:
+    parts = (version or "").split(".")
+    if len(parts) < 2 or not parts[1].isdigit():
+        return None
+    if parts[0] == "1":
+        return ("1", parts[1])
+    if parts[0].isdigit() and len(parts[0]) == 2:
+        return (parts[0], parts[1])
+    return None
+
+
+def pack_version_attempts(game_version: str) -> list[str]:
+    """Точная версия, а для «1.21» без патча — соседние релизы той же линии."""
+    raw = (game_version or "").strip()
+    parsed = minecraft_release_from_id(raw) or raw
+    if not parsed:
+        return []
+    attempts = [parsed]
+    if len(parsed.split(".")) != 2:
+        return attempts
+    key = _line_key(parsed)
+    if key is None:
+        return attempts
+    extras = [item for item in PACK_VERSIONS if _line_key(item) == key and item not in attempts]
+
+    def sort_key(item: str) -> tuple:
+        bits = item.split(".")
+        patch = int(bits[2]) if len(bits) > 2 and bits[2].isdigit() else 10**6
+        return (0 if item.endswith(".1") else 1, patch)
+
+    extras.sort(key=sort_key)
+    return attempts + extras[:5]
+
+
 def build_pack(
     query: str,
     loader: str,
@@ -872,44 +931,60 @@ def build_pack(
     if not titles:
         titles.append("Подбор")
         summaries.append("По запросу взял совместимые моды с Modrinth, а если их там нет — с CurseForge.")
-    queue: list[tuple[str, bool]] = [(slug, False) for slug in slugs] + [(slug, True) for slug in shaders]
-    seen: set[str] = set()
+    queue_seed: list[tuple[str, bool]] = [(slug, False) for slug in slugs] + [(slug, True) for slug in shaders]
+
+    def gather(active_version: str) -> tuple[list[dict], list[str]]:
+        queue = list(queue_seed)
+        seen: set[str] = set()
+        found: list[dict] = []
+        missed: list[str] = []
+        limit = 16 if preset else 10
+        while queue and len(found) < limit:
+            slug, shader = queue.pop(0)
+            if slug in seen:
+                continue
+            seen.add(slug)
+            try:
+                info = resolve_project(slug, mod_loader, active_version, shader=shader, sources=sources)
+            except Exception:
+                missed.append(slug)
+                continue
+            if not info:
+                missed.append(slug)
+                continue
+            if any(item["slug"] == info["slug"] for item in found):
+                continue
+            seen.add(info["slug"])
+            found.append(info)
+            if not shader:
+                for dep in info.get("deps") or []:
+                    if dep.get("dependency_type") != "required":
+                        continue
+                    project_id = str(dep.get("project_id") or "")
+                    if project_id and project_id not in seen and len(found) + len(queue) < limit + 4:
+                        queue.append((project_id, False))
+        return found, missed
+
+    asked_version = game_version
+    attempts = pack_version_attempts(game_version) or [game_version]
     mods: list[dict] = []
     skipped: list[str] = []
-    limit = 16 if preset else 10
-    while queue and len(mods) < limit:
-        slug, shader = queue.pop(0)
-        if slug in seen:
-            continue
-        seen.add(slug)
-        try:
-            info = resolve_project(slug, mod_loader, game_version, shader=shader, sources=sources)
-        except Exception:
-            skipped.append(slug)
-            continue
-        if not info:
-            skipped.append(slug)
-            continue
-        if any(item["slug"] == info["slug"] for item in mods):
-            continue
-        seen.add(info["slug"])
-        mods.append(info)
-        if not shader:
-            for dep in info.get("deps") or []:
-                if dep.get("dependency_type") != "required":
-                    continue
-                project_id = str(dep.get("project_id") or "")
-                if project_id and project_id not in seen and len(mods) + len(queue) < limit + 4:
-                    queue.append((project_id, False))
+    for active in attempts:
+        mods, skipped = gather(active)
+        game_version = active
+        if mods:
+            break
     if not mods:
         raise RuntimeError(
-            f"Для {game_version} ({mod_loader}) нет файлов ни на Modrinth, ни на CurseForge. "
-            "Выбери другую версию в меню сборок."
+            f"Для {asked_version} ({mod_loader}) нет файлов ни на Modrinth, ни на CurseForge. "
+            "Попробуй 1.21.1, 1.20.1 или 26.3."
         )
     names = ", ".join(item["title"] for item in mods[:16])
     extra = ""
     if loader == "optifine":
         extra = " OptiFine моды почти не грузит, поэтому набор под Forge."
+    if game_version != asked_version:
+        extra += f" На {asked_version} файлов не нашлось, поэтому взял {game_version}."
     if skipped:
         extra += " Часть модов не нашлась именно на этой версии и пропущена."
     labels = [name for key, name in (("modrinth", "Modrinth"), ("curseforge", "CurseForge")) if key in sources]

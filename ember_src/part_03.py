@@ -8,6 +8,7 @@ class EmberButton(QWidget):
         self._text = text
         self._primary = primary
         self._nav = nav
+        self._shrink = False
         self._selected = False
         self._hover = 0.0
         self._pressed = False
@@ -22,6 +23,11 @@ class EmberButton(QWidget):
         self.setFont(QFont("Segoe UI", 12 if primary else 10, weight))
         if nav:
             self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def setShrinkable(self, shrink: bool = True) -> None:
+        self._shrink = bool(shrink)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def setSelected(self, selected: bool) -> None:
         self._selected = bool(selected)
@@ -38,6 +44,8 @@ class EmberButton(QWidget):
         return QSize(max(width, 84), 46 if self._primary else 34)
 
     def minimumSizeHint(self) -> QSize:
+        if self._shrink:
+            return QSize(48, 46 if self._primary else 34)
         return self.sizeHint()
 
     def setEnabled(self, enabled: bool) -> None:
@@ -125,7 +133,10 @@ class EmberButton(QWidget):
             painter.drawPath(path)
         painter.setPen(text_color)
         painter.setFont(self.font())
-        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._text)
+        shown = QFontMetrics(self.font()).elidedText(
+            self._text, Qt.TextElideMode.ElideRight, max(8, rect.width() - 16)
+        )
+        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, shown)
         painter.end()
 
     def _paint_nav(self, painter: QPainter) -> None:
@@ -263,6 +274,23 @@ class PackWorker(QThread):
             self.failed.emit(str(exc))
             return
         self.ready.emit(plan)
+
+
+class NewsWorker(QThread):
+    ready = pyqtSignal(list)
+    failed = pyqtSignal(str)
+
+    def __init__(self, repo: str) -> None:
+        super().__init__()
+        self.repo = repo
+
+    def run(self) -> None:
+        try:
+            notes = github_release_notes(self.repo)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        self.ready.emit(notes)
 
 
 class UpdateCheckWorker(QThread):
@@ -731,7 +759,7 @@ class PackMenuDialog(QDialog):
         self.desc.setText(
             pack["title"] + "\n\n" + pack["summary"]
             + "\n\nСначала ищется файл на Modrinth. Если на этой версии его нет, берётся CurseForge. "
-            "Несовместимое пропускается, версия сама на 1.21.1 не подменяется."
+            "Если написать просто 1.21, а файлов нет, возьмётся ближайшая 1.21.x, где моды есть."
         )
 
     def _accept_pack(self) -> None:
