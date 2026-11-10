@@ -7,3 +7,6 @@ dist/
 server.json
 .ember-installed
 .DS_Store
+icon.png
+icon.ico
+icon.icns

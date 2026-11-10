@@ -1,0 +1,112 @@
+"""Ember — компактный офлайн-лаунчер Minecraft.
+
+Запуск:
+    python launcher.py
+
+Код программы лежит в ember_src/part_*.py и выполняется в этом модуле.
+Версию меняй здесь: от неё зависит автообновление.
+"""
+
+from __future__ import annotations
+
+import ctypes
+import hashlib
+import json
+import math
+import os
+import pathlib
+import random
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import traceback
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+from datetime import datetime
+
+try:
+    import minecraft_launcher_lib
+    from minecraft_launcher_lib.exceptions import UnsupportedVersion, VersionNotFound
+except ImportError as import_error:
+    minecraft_launcher_lib = None
+    VersionNotFound = Exception
+    UnsupportedVersion = Exception
+    _MLL_IMPORT_ERROR = import_error
+else:
+    _MLL_IMPORT_ERROR = None
+
+from PyQt6.QtCore import (
+    QEasingCurve,
+    QPointF,
+    QPropertyAnimation,
+    QRectF,
+    QSize,
+    Qt,
+    QThread,
+    QTimer,
+    QUrl,
+    QVariantAnimation,
+    pyqtSignal,
+)
+from PyQt6.QtGui import (
+    QColor,
+    QCursor,
+    QDesktopServices,
+    QFont,
+    QFontMetrics,
+    QIcon,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QPen,
+    QPixmap,
+    QPolygonF,
+)
+from PyQt6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QProgressBar,
+    QSlider,
+    QStyledItemDelegate,
+    QVBoxLayout,
+    QWidget,
+)
+
+APP_VERSION = "1.8.0"
+USER_AGENT = "EmberLauncher/1.8"
+AUTHOR = "craor"
+DEFAULT_UPDATE_REPO = "craor/EmberLauncher"
+
+
+def _bundle_root() -> pathlib.Path:
+    if getattr(sys, "frozen", False):
+        return pathlib.Path(getattr(sys, "_MEIPASS"))
+    return pathlib.Path(__file__).resolve().parent
+
+
+def _load_program() -> None:
+    folder = _bundle_root() / "ember_src"
+    parts = sorted(folder.glob("part_*.py"))
+    if not parts:
+        raise RuntimeError("Не найдены файлы ember_src")
+    source = "".join(part.read_text(encoding="utf-8") for part in parts)
+    exec(compile(source, "ember_src/launcher.py", "exec"), globals())
+
+
+_load_program()
