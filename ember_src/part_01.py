@@ -108,7 +108,7 @@ ALLOWED_HOSTS = frozenset({
 })
 INSTALLED_ROLE = Qt.ItemDataRole.UserRole + 1
 _GAME_VERSION_RE = re.compile(
-    r"(?<!\d)(1\.\d{1,2}(?:\.\d{1,2})?|\d{2}\.\d{1,2}(?:\.\d{1,2})?)(?!\d)"
+    r"(?<![\d.])(1\.\d{1,2}(?:\.\d{1,2})?|\d{2}\.\d{1,2}(?:\.\d{1,2})?)(?![\d.])"
 )
 LOADERS = (
     ("vanilla", "Vanilla"),
