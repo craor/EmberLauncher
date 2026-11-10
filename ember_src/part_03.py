@@ -20,7 +20,8 @@ class EmberButton(QWidget):
         self.setMinimumHeight(42 if nav else (46 if primary else 34))
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         weight = QFont.Weight.Bold if primary or nav else QFont.Weight.DemiBold
-        self.setFont(QFont("Segoe UI", 12 if primary else 10, weight))
+        family = "Pixelify Sans" if primary else "Alegreya Sans"
+        self.setFont(QFont(family, 11 if primary else 10, weight))
         if nav:
             self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
@@ -97,73 +98,63 @@ class EmberButton(QWidget):
     def paintEvent(self, event) -> None:
         del event
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         if self._nav:
             self._paint_nav(painter)
             painter.end()
             return
-        rect = self.rect().adjusted(1, 1, -1, -1)
-        if rect.width() <= 4 or rect.height() <= 4:
+        rect = self.rect().adjusted(1, 1, -2, -2)
+        if rect.width() <= 8 or rect.height() <= 8:
             painter.end()
             return
-        radius = 14 if self._primary else 10
-        path = QPainterPath()
-        path.addRoundedRect(float(rect.x()), float(rect.y()), float(rect.width()), float(rect.height()), radius, radius)
         if self._primary:
-            left = lerp_color(QColor("#e26412"), QColor("#ff9a3d"), self._hover)
-            right = lerp_color(QColor("#ffb15e"), QColor("#ffe1b0"), self._hover)
-            if self._pressed and self.isEnabled():
-                left, right = left.darker(112), right.darker(112)
-            if not self.isEnabled():
-                left, right = QColor("#3a332c"), QColor("#51483e")
-            gradient = QLinearGradient(QPointF(rect.topLeft()), QPointF(rect.topRight()))
-            gradient.setColorAt(0.0, left)
-            gradient.setColorAt(1.0, right)
-            painter.fillPath(path, gradient)
-            text_color = QColor("#1a1008") if self.isEnabled() else QColor("#b1a69a")
+            face = lerp_color(QColor("#E8873A"), QColor("#F2A35C"), self._hover)
+            edge = QColor("#8A3E12")
+            ink = QColor("#2B1F17") if self.isEnabled() else QColor("#6B5A48")
         else:
-            fill = lerp_color(QColor(255, 255, 255, 16), QColor(255, 255, 255, 42), self._hover)
-            border = lerp_color(QColor(255, 255, 255, 36), QColor(255, 176, 90, 210), self._hover)
-            text_color = QColor("#f4f1ea") if self.isEnabled() else QColor(255, 255, 255, 90)
-            if not self.isEnabled():
-                fill = QColor(255, 255, 255, 10)
-                border = QColor(255, 255, 255, 18)
-            painter.fillPath(path, fill)
-            painter.setPen(QPen(border, 1.3))
-            painter.drawPath(path)
-        painter.setPen(text_color)
+            face = lerp_color(QColor("#4A3426"), QColor("#5C4332"), self._hover)
+            edge = QColor("#1A120C")
+            ink = QColor("#E7D7B1") if self.isEnabled() else QColor("#8A7560")
+        if not self.isEnabled():
+            face = QColor("#3A2C22")
+        shift = 3 if self._pressed and self.isEnabled() else 0
+        depth = 4
+        painter.fillRect(rect.adjusted(0, depth, 0, 0), edge)
+        face_rect = rect.adjusted(0, shift, 0, -(depth - shift))
+        painter.fillRect(face_rect, face)
+        nail = QColor("#1A120C")
+        painter.fillRect(face_rect.left() + 4, face_rect.top() + 4, 3, 3, nail)
+        painter.fillRect(face_rect.right() - 7, face_rect.top() + 4, 3, 3, nail)
+        painter.setPen(ink)
         painter.setFont(self.font())
         shown = QFontMetrics(self.font()).elidedText(
-            self._text, Qt.TextElideMode.ElideRight, max(8, rect.width() - 16)
+            self._text, Qt.TextElideMode.ElideRight, max(8, face_rect.width() - 16)
         )
-        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, shown)
+        painter.drawText(face_rect, Qt.AlignmentFlag.AlignCenter, shown)
         painter.end()
 
     def _paint_nav(self, painter: QPainter) -> None:
-        rect = QRectF(self.rect().adjusted(2, 2, -2, -2))
-        path = QPainterPath()
-        path.addRoundedRect(rect, 12, 12)
+        rect = self.rect().adjusted(2, 2, -2, -2)
         if self._selected:
-            fill = QColor(255, 138, 42, 78 + int(40 * self._hover))
-            border = QColor(255, 186, 110, 210)
+            face = QColor("#E8873A")
+            ink = QColor("#2B1F17")
         elif self._hover > 0:
-            fill = QColor(255, 255, 255, int(28 * self._hover))
-            border = QColor(255, 176, 90, int(140 * self._hover))
+            face = QColor("#5C4332")
+            ink = QColor("#E7D7B1")
         else:
-            fill = QColor(0, 0, 0, 0)
-            border = QColor(0, 0, 0, 0)
-        painter.fillPath(path, fill)
-        if border.alpha() > 0:
-            painter.setPen(QPen(border, 1.2))
-            painter.drawPath(path)
-        icon = QRectF(rect.left() + 12, rect.center().y() - 7, 14, 14)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#ff8a2a") if self._selected else QColor(255, 214, 170, 160))
-        painter.drawRoundedRect(icon, 4, 4)
-        painter.setPen(QColor("#fff6ec") if self._selected else QColor("#e6d8c8"))
+            face = QColor("#3A291C")
+            ink = QColor("#D9C7A0")
+        if not self.isEnabled():
+            face = QColor("#2B1F17")
+            ink = QColor("#6B5A48")
+        painter.fillRect(rect, QColor("#1A120C"))
+        painter.fillRect(rect.adjusted(0, 0, 0, -3), face)
+        rivet = QColor("#2B1F17") if self._selected else QColor("#E8873A")
+        painter.fillRect(rect.left() + 10, rect.center().y() - 4, 8, 8, rivet)
+        painter.setPen(ink)
         painter.setFont(self.font())
         painter.drawText(
-            QRectF(icon.right() + 10, rect.top(), rect.width() - 40, rect.height()),
+            QRectF(rect.left() + 26, rect.top(), rect.width() - 32, rect.height() - 3),
             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
             self._text,
         )
@@ -571,8 +562,8 @@ class GradientWindow(QWidget):
         ]
         self._clock = QTimer(self)
         self._clock.timeout.connect(self._advance)
-        self._clock.start(33)
-        self._trail: list[dict] = []
+        self._clock.start(50)
+        self._mouse = (0.5, 0.5)
         self.setMouseTracking(True)
 
     def _advance(self) -> None:
@@ -585,46 +576,57 @@ class GradientWindow(QWidget):
                 ember["x"] = random.random()
             ember["x"] = ember["x"] % 1.0
         local = self.mapFromGlobal(QCursor.pos())
-        if self.rect().contains(local):
-            x = float(local.x())
-            y = float(local.y())
-            last = self._trail[-1] if self._trail else None
-            if last is None or abs(last["x"] - x) > 3 or abs(last["y"] - y) > 3:
-                self._trail.append({"x": x, "y": y, "life": 1.0})
-        for point in self._trail:
-            point["life"] -= 0.035
-        if len(self._trail) > 42:
-            self._trail = self._trail[-42:]
-        self._trail = [point for point in self._trail if point["life"] > 0]
+        if self.rect().contains(local) and self.width() and self.height():
+            self._mouse = (local.x() / self.width(), local.y() / self.height())
         self.update()
 
     def paintEvent(self, event) -> None:
         del event
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        width = float(self.width())
-        height = float(self.height())
-        shift = 0.5 + 0.5 * math.sin(self._t * 0.45)
-        gradient = QLinearGradient(0, 0, width, height)
-        gradient.setColorAt(0.0, QColor(10, 16, 14))
-        gradient.setColorAt(0.42 + 0.08 * shift, QColor(24, 16, 12))
-        gradient.setColorAt(1.0, QColor(34, 13, 8))
-        painter.fillRect(self.rect(), gradient)
+        width = self.width()
+        height = self.height()
+        painter.fillRect(self.rect(), QColor("#2B1F17"))
+        sky = QLinearGradient(0, 0, 0, height * 0.62)
+        sky.setColorAt(0.0, QColor("#6E5344"))
+        sky.setColorAt(1.0, QColor("#2B1F17"))
+        painter.fillRect(0, 0, width, int(height * 0.62), sky)
+        mx = (self._mouse[0] - 0.5) if hasattr(self, "_mouse") else 0.0
+        my = (self._mouse[1] - 0.5) if hasattr(self, "_mouse") else 0.0
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         painter.setPen(Qt.PenStyle.NoPen)
-        glow_x = width * (0.2 + 0.55 * (0.5 + 0.5 * math.sin(self._t * 0.25)))
-        glow = QPainterPath()
-        glow.addEllipse(QPointF(glow_x, height * 0.18), width * 0.34, height * 0.28)
-        painter.fillPath(glow, QColor(255, 120, 40, 26))
-        for ember in self._embers:
-            painter.setBrush(QColor(255, 156, 70, int(ember["a"])))
-            painter.drawEllipse(QPointF(ember["x"] * width, ember["y"] * height), ember["s"], ember["s"])
-        for point in self._trail:
-            life = float(point["life"])
-            radius = 4 + 16 * (1.0 - life)
-            painter.setBrush(QColor(255, 90, 24, int(70 * life)))
-            painter.drawEllipse(QPointF(point["x"], point["y"]), radius, radius)
-            painter.setBrush(QColor(255, 186, 90, int(190 * life)))
-            painter.drawEllipse(QPointF(point["x"], point["y"]), 1.6 + 2.4 * life, 1.6 + 2.4 * life)
+        drift = int(self._t * 6) % 48
+        for index, cloud in enumerate(((40, 36, 28), (180, 58, 18), (320, 28, 22), (520, 70, 16))):
+            cx = int((cloud[0] + drift + mx * 10 + index * 90) % (width + 80)) - 40
+            cy = int(cloud[1] + my * 6)
+            painter.fillRect(cx, cy, cloud[2], 6, QColor("#D9C7A0"))
+            painter.fillRect(cx + 4, cy - 4, cloud[2] - 8, 4, QColor("#E7D7B1"))
+        base_y = int(height * 0.46 + my * 10)
+        painter.fillRect(int(mx * 8), base_y, width, height, QColor("#24301C"))
+        peaks = (0, 36, 18, 52, 8, 40, 22, 48, 12, 34)
+        for index, peak in enumerate(peaks):
+            left = int(index * (width / 8) - 20 + mx * 14)
+            painter.fillRect(left, base_y - peak * 3, 26, peak * 3, QColor("#3E5330"))
+            painter.fillRect(left + 8, base_y - peak * 3 - 10, 10, 10, QColor("#6B8F47"))
+        ground = int(height * 0.72)
+        painter.fillRect(0, ground, width, height - ground, QColor("#3A291C"))
+        for x in range(0, width, 18):
+            painter.fillRect(x, ground, 8, 4, QColor("#4A3426"))
+        flicker = 180 + int(50 * math.sin(self._t * 7))
+        torch_x = 28
+        torch_y = ground - 28
+        painter.fillRect(torch_x + 3, torch_y + 10, 4, 16, QColor("#4A3426"))
+        painter.fillRect(torch_x, torch_y, 10, 12, QColor(232, 135, 58, flicker))
+        painter.fillRect(torch_x + 3, torch_y - 4, 4, 4, QColor(255, 196, 90, flicker))
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        shade = QLinearGradient(0, 0, 0, 70)
+        shade.setColorAt(0.0, QColor(26, 18, 12, 170))
+        shade.setColorAt(1.0, QColor(26, 18, 12, 0))
+        painter.fillRect(0, 0, width, 70, shade)
+        side = QLinearGradient(0, 0, 48, 0)
+        side.setColorAt(0.0, QColor(26, 18, 12, 150))
+        side.setColorAt(1.0, QColor(26, 18, 12, 0))
+        painter.fillRect(0, 0, 48, height, side)
+        painter.fillRect(width - 48, 0, 48, height, side)
         painter.end()
 
 
@@ -710,20 +712,14 @@ class ServerCard(QWidget):
     def paintEvent(self, event) -> None:
         del event
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = QRectF(self.rect().adjusted(1, 1, -2, -2))
-        path = QPainterPath()
-        path.addRoundedRect(rect, 22, 22)
-        fill = QLinearGradient(rect.topLeft(), rect.bottomRight())
-        fill.setColorAt(0.0, QColor(28, 16, 12, 230))
-        fill.setColorAt(1.0, QColor(14, 16, 14, 235))
-        painter.fillPath(path, fill)
-        alpha = 110 + int(90 * (0.5 + 0.5 * math.sin(self._phase)))
-        painter.setPen(QPen(QColor(255, 150, 60, alpha), 1.6))
-        painter.drawPath(path)
-        pulse = QPainterPath()
-        pulse.addEllipse(QPointF(rect.center().x(), rect.top() + 28), 70 + 8 * math.sin(self._phase), 26)
-        painter.fillPath(pulse, QColor(255, 120, 40, 28))
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        rect = self.rect().adjusted(1, 1, -2, -2)
+        painter.fillRect(rect, QColor("#2B1F17"))
+        painter.fillRect(rect.adjusted(3, 3, -3, -3), QColor("#3A291C"))
+        painter.setPen(QPen(QColor("#1A120C"), 2))
+        painter.drawRect(rect.adjusted(3, 3, -3, -3))
+        painter.fillRect(rect.left() + 8, rect.top() + 8, 4, 4, QColor("#E8873A"))
+        painter.fillRect(rect.right() - 12, rect.top() + 8, 4, 4, QColor("#E8873A"))
         painter.end()
 
 

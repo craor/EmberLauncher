@@ -41,6 +41,7 @@ else:
 
 from PyQt6.QtCore import (
     QEasingCurve,
+    QByteArray,
     QPointF,
     QPropertyAnimation,
     QRectF,
@@ -57,6 +58,7 @@ from PyQt6.QtGui import (
     QCursor,
     QDesktopServices,
     QFont,
+    QFontDatabase,
     QFontMetrics,
     QIcon,
     QLinearGradient,
@@ -92,8 +94,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-APP_VERSION = "1.8.4"
-USER_AGENT = "EmberLauncher/1.8.4"
+APP_VERSION = "1.8.5"
+USER_AGENT = "EmberLauncher/1.8.5"
 AUTHOR = "craor"
 DEFAULT_UPDATE_REPO = "craor/EmberLauncher"
 

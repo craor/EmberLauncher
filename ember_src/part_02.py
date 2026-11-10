@@ -1990,6 +1990,121 @@ def finish_mod_folder(directory: str, loader: str, game_version: str, status=Non
     return " ".join(notes)
 
 
+def preset_from_text(text: str) -> dict | None:
+    """Кнопка «Выживание» и фраза «собери выживание» — один и тот же набор, не случайный поиск."""
+    low = (text or "").lower()
+    order = (
+        ("zombie", ("зомби", "zombie", "апокал", "нежить", "орда")),
+        ("weapons", ("оруж", "weapon", "мушкет")),
+        ("machines", ("механ", "физик", "криэйт", "create")),
+        ("magic", ("маги", "magic", "ботан", "закл")),
+        ("visual", ("визуал", "шейдер", "shader")),
+        ("survival", ("выжив", "survival", "хардкор")),
+    )
+    for preset_id, words in order:
+        if any(word in low for word in words):
+            return next((pack for pack in PRESETS if pack["id"] == preset_id), None)
+    return None
+
+
+def _crash_blobs(directory: str, launcher_log: str) -> str:
+    parts: list[str] = []
+    paths = [os.path.join(directory, "logs", "latest.log")]
+    crash_dir = os.path.join(directory, "crash-reports")
+    if os.path.isdir(crash_dir):
+        reports = [
+            os.path.join(crash_dir, name)
+            for name in os.listdir(crash_dir)
+            if name.endswith(".txt")
+        ]
+        reports.sort(key=lambda path: os.path.getmtime(path) if os.path.isfile(path) else 0, reverse=True)
+        paths.extend(reports[:1])
+    if launcher_log:
+        paths.append(launcher_log)
+    for path in paths:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                handle.seek(max(0, size - 80_000))
+                parts.append(handle.read())
+        except OSError:
+            continue
+    return "\n".join(parts)
+
+
+def _crash_reason(text: str) -> str:
+    for line in text.splitlines():
+        low = line.lower()
+        if "unsupportedclassversionerror" in low or "more recent version of the java runtime" in low:
+            return (
+                "Java слишком старая для этой игры. Во вкладке «Установка» выбери Java 21, "
+                "для номеров 26.x — Java 25, и скачай её."
+            )
+        if "requires" in low and ("mod" in low or "мод" in low):
+            return "Мод не нашёл библиотеку: " + line.strip()[-220:]
+        stripped = line.strip()
+        if stripped.lower().startswith("failure message:"):
+            return stripped.split(":", 1)[1].strip()[:240]
+    caused = [line.strip() for line in text.splitlines() if line.strip().startswith("Caused by:")]
+    if caused:
+        return caused[-1][:240]
+    return "Игра упала при запуске, до меню не дошла."
+
+
+def startup_failure(directory: str, launcher_log: str = "") -> tuple[str, list[str]]:
+    """Коротко говорит, почему игра сразу закрылась, и выключает мод из строк ошибки."""
+    text = _crash_blobs(directory, launcher_log)
+    if not text.strip():
+        return "Minecraft закрылся сразу после старта. Лог игры ещё пустой.", []
+    low = text.lower()
+    if "unsupportedclassversionerror" in low or "more recent version of the java runtime" in low:
+        return _crash_reason(text), []
+    reason = _crash_reason(text)
+    interesting = [
+        line for line in text.splitlines()
+        if any(mark in line.lower() for mark in (
+            "error", "fatal", "exception", "missing", "requires", "failed", "crash", "mixin",
+        ))
+    ]
+    blob = "\n".join(interesting[-80:])
+    compact_blob = _compact_id(blob)
+    skip_words = {
+        "exception", "missing", "runtime", "version", "loader", "mixin", "failed", "caused",
+        "error", "fatal", "minecraft", "javafml", "required", "modid", "thread", "system",
+    }
+    tokens: set[str] = set()
+    for word in re.findall(r"[A-Za-z][A-Za-z0-9_\-]{5,}", blob):
+        token = _compact_id(word)
+        if len(token) >= 6 and token not in skip_words:
+            tokens.add(token)
+    mods_dir = os.path.join(directory, "mods")
+    disabled: list[str] = []
+    if os.path.isdir(mods_dir) and tokens:
+        for name in sorted(os.listdir(mods_dir)):
+            if not name.lower().endswith(".jar") or len(disabled) >= 4:
+                continue
+            stem = _compact_id(os.path.splitext(name)[0])
+            if len(stem) < 6:
+                continue
+            if not any(token in stem or stem in token for token in tokens):
+                continue
+            if stem not in compact_blob and not any(token in stem for token in tokens):
+                continue
+            dest = os.path.join(mods_dir, name + ".disabled")
+            try:
+                os.replace(os.path.join(mods_dir, name), dest)
+            except OSError:
+                continue
+            disabled.append(name)
+    if disabled:
+        return (
+            f"{reason} Отключил моды из лога ошибки: {', '.join(disabled)}. Нажми «Играть» ещё раз.",
+            disabled,
+        )
+    return reason, []
+
+
 def build_pack(
     query: str,
     loader: str,
@@ -2003,6 +2118,8 @@ def build_pack(
     if mod_loader not in ("fabric", "forge", "neoforge", "quilt"):
         mod_loader = "fabric"
     preset = next((pack for pack in PRESETS if pack["id"] == preset_id), None)
+    if preset is None:
+        preset = preset_from_text(text)
     if not pack_version_allowed(game_version):
         raise RuntimeError(
             "Сборки модов ставятся с 1.19.2 и новее, на любой номер: 1.19.2, 1.20.1, 1.21, 1.21.8, 26.3. "
@@ -2109,12 +2226,8 @@ def build_pack(
     best: tuple | None = None
     saw_mods = False
 
-    def consider(active_loader: str, active: str) -> bool:
+    def finish_candidate(active_loader: str, active: str, gathered: list[dict], skipped_now: list[str]) -> bool:
         nonlocal best, saw_mods
-        found, shader_slugs = slugs_for(active_loader, active)
-        if not found and not shader_slugs:
-            return False
-        gathered, skipped_now = gather(active_loader, active, found, shader_slugs)
         if not gathered:
             return False
         saw_mods = True
@@ -2128,20 +2241,62 @@ def build_pack(
         if not content_left and not any(item.get("folder") == "shaderpacks" for item in closed):
             return False
         score = (
-            1 if not dropped else 0,
             len(content_left),
+            1 if not dropped else 0,
             -len(dropped),
             1 if active == asked_version else 0,
             1 if active_loader == asked_loader else 0,
         )
         if best is None or score > best[0]:
             best = (score, active_loader, active, closed, skipped_now, dropped)
-        return bool(content_left) or any(item.get("folder") == "shaderpacks" for item in closed)
+        return True
 
-    if not consider(asked_loader, asked_version):
+    def consider(active_loader: str, active: str) -> bool:
+        found, shader_slugs = slugs_for(active_loader, active)
+        if not found and not shader_slugs:
+            return False
+        gathered, skipped_now = gather(active_loader, active, found, shader_slugs)
+        return finish_candidate(active_loader, active, gathered, skipped_now)
+
+    if preset:
+        pools: list[tuple] = []
+        scan = [(asked_loader, active) for active in attempts[:4]]
+        for active_loader, active in scan:
+            found, shader_slugs = slugs_for(active_loader, active)
+            if not found and not shader_slugs:
+                continue
+            gathered, skipped_now = gather(active_loader, active, found, shader_slugs)
+            count = sum(1 for item in gathered if item.get("folder") != "shaderpacks")
+            if count:
+                pools.append((count, active_loader, active, gathered, skipped_now))
+        if pools:
+            same = [item for item in pools if item[1] == asked_loader]
+            pool = same or pools
+            pool.sort(
+                key=lambda item: (
+                    item[0],
+                    1 if item[2] == asked_version else 0,
+                ),
+                reverse=True,
+            )
+            asked_pool = next((item for item in pool if item[2] == asked_version), None)
+            top = pool[0]
+            if asked_pool and asked_pool[0] >= top[0]:
+                chosen = [asked_pool]
+            else:
+                chosen = [top]
+                if asked_pool and asked_pool not in chosen:
+                    chosen.append(asked_pool)
+            for count, active_loader, active, gathered, skipped_now in chosen:
+                del count
+                finish_candidate(active_loader, active, gathered, skipped_now)
+        if best is None and len(loader_order) > 1:
+            for active in attempts[:2]:
+                consider(loader_order[1], active)
+    elif not consider(asked_loader, asked_version):
         checked = 0
         for active_loader in loader_order:
-            if best is not None and best[0][0] == 1:
+            if best is not None and best[0][1] == 1 and best[0][0] > 0:
                 break
             for active in attempts:
                 if active_loader == asked_loader and active == asked_version:
@@ -2150,7 +2305,7 @@ def build_pack(
                     break
                 checked += 1
                 consider(active_loader, active)
-                if best is not None and best[0][0] == 1:
+                if best is not None and best[0][1] == 1:
                     break
     if best is None:
         if saw_mods:
@@ -2169,8 +2324,8 @@ def build_pack(
         extra = " OptiFine моды почти не грузит, поэтому набор под Forge."
     if mod_loader != asked_loader or game_version != asked_version:
         extra += (
-            f" На {asked_version} ({asked_loader}) библиотеки модов не сошлись, "
-            f"поэтому взял {game_version} ({mod_loader})."
+            f" На {asked_version} ({asked_loader}) готовых модов мало, "
+            f"поэтому собрал {game_version} ({mod_loader})."
         )
     libs = [item["title"] for item in mods if item.get("library")]
     if libs:

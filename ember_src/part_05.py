@@ -231,6 +231,18 @@ class InstallerWindow(GradientWindow):
         QTimer.singleShot(400, QApplication.instance().quit)
 
 
+def load_ui_fonts() -> None:
+    folder = _bundle_root() / "ember_src" / "fonts"
+    if not folder.is_dir():
+        return
+    for path in sorted(folder.glob("*.b64")):
+        try:
+            raw = base64.b64decode("".join(path.read_text(encoding="ascii").split()))
+        except (OSError, ValueError):
+            continue
+        QFontDatabase.addApplicationFontFromData(QByteArray(raw))
+
+
 def main() -> None:
     if os.name == "nt":
         try:
@@ -242,23 +254,19 @@ def main() -> None:
     app.setStyle("Fusion")
     app.setApplicationName(APP_NAME)
     app.setWindowIcon(load_app_icon())
+    load_ui_fonts()
     app.setStyleSheet(STYLESHEET)
-    if os.name == "nt":
-        app.setFont(QFont("Segoe UI", 10))
-    elif sys.platform == "darwin":
-        app.setFont(QFont("Helvetica Neue", 13))
-    else:
-        app.setFont(QFont("Sans Serif", 10))
+    app.setFont(QFont("Alegreya Sans", 11))
     palette = QPalette()
-    palette.setColor(QPalette.ColorRole.Window, QColor("#161b17"))
-    palette.setColor(QPalette.ColorRole.WindowText, QColor("#f4f1ea"))
-    palette.setColor(QPalette.ColorRole.Base, QColor("#121613"))
-    palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#1b211c"))
-    palette.setColor(QPalette.ColorRole.Text, QColor("#f4f1ea"))
-    palette.setColor(QPalette.ColorRole.Button, QColor("#243028"))
-    palette.setColor(QPalette.ColorRole.ButtonText, QColor("#f4f1ea"))
-    palette.setColor(QPalette.ColorRole.Highlight, QColor("#ff8a2a"))
-    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#1a1008"))
+    palette.setColor(QPalette.ColorRole.Window, QColor("#2B1F17"))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor("#D9C7A0"))
+    palette.setColor(QPalette.ColorRole.Base, QColor("#E7D7B1"))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#3A291C"))
+    palette.setColor(QPalette.ColorRole.Text, QColor("#2B1F17"))
+    palette.setColor(QPalette.ColorRole.Button, QColor("#4A3426"))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor("#E7D7B1"))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor("#E8873A"))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#2B1F17"))
     app.setPalette(palette)
     _install_excepthook()
     if minecraft_launcher_lib is None:

@@ -19,52 +19,45 @@ class StageBanner(QWidget):
     def paintEvent(self, event) -> None:
         del event
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        rect = QRectF(self.rect().adjusted(1, 1, -2, -2))
-        clip = QPainterPath()
-        clip.addRoundedRect(rect, 18, 18)
-        painter.setClipPath(clip)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+        rect = self.rect().adjusted(2, 2, -3, -3)
+        painter.fillRect(rect, QColor("#1A120C"))
+        photo = rect.adjusted(6, 6, -6, -6)
+        painter.setClipRect(photo)
         if self._art.isNull():
-            sky = QLinearGradient(rect.topLeft(), rect.bottomRight())
-            sky.setColorAt(0.0, QColor(48, 24, 12))
-            sky.setColorAt(1.0, QColor(255, 112, 32))
-            painter.fillPath(clip, sky)
+            painter.fillRect(photo, QColor("#3A291C"))
         else:
             scaled = self._art.scaled(
-                max(1, int(rect.width())),
-                max(1, int(rect.height())),
+                max(1, photo.width()),
+                max(1, photo.height()),
                 Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                Qt.TransformationMode.SmoothTransformation,
+                Qt.TransformationMode.FastTransformation,
             )
-            x = int(rect.left() + (rect.width() - scaled.width()) / 2)
-            y = int(rect.top() + (rect.height() - scaled.height()) / 2)
+            x = photo.left() + (photo.width() - scaled.width()) // 2
+            y = photo.top() + (photo.height() - scaled.height()) // 2
             painter.drawPixmap(x, y, scaled)
-        scrim = QLinearGradient(rect.bottomLeft(), QPointF(rect.left(), rect.bottom() - 86))
-        scrim.setColorAt(0.0, QColor(12, 8, 6, 220))
-        scrim.setColorAt(1.0, QColor(12, 8, 6, 0))
-        painter.fillRect(QRectF(rect.left(), rect.bottom() - 86, rect.width(), 86), scrim)
-        painter.setPen(QColor("#ffe7c4"))
-        painter.setFont(QFont("Segoe UI", 15, QFont.Weight.Bold))
+        painter.setClipping(False)
+        painter.fillRect(photo.left(), photo.bottom() - 52, photo.width(), 52, QColor(43, 31, 23, 220))
+        painter.setPen(QColor("#E8873A"))
+        painter.setFont(QFont("Pixelify Sans", 14))
         painter.drawText(
-            QRectF(rect.left() + 16, rect.bottom() - 58, rect.width() - 32, 24),
+            QRectF(photo.left() + 12, photo.bottom() - 48, photo.width() - 24, 22),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             self._version,
         )
-        painter.setPen(QColor("#f6e6d4"))
-        painter.setFont(QFont("Segoe UI", 10))
+        painter.setPen(QColor("#E7D7B1"))
+        painter.setFont(QFont("Alegreya Sans", 10))
         detail = QFontMetrics(painter.font()).elidedText(
-            self._detail, Qt.TextElideMode.ElideRight, max(8, int(rect.width()) - 36)
+            self._detail, Qt.TextElideMode.ElideRight, max(8, photo.width() - 28)
         )
         painter.drawText(
-            QRectF(rect.left() + 16, rect.bottom() - 32, rect.width() - 32, 20),
+            QRectF(photo.left() + 12, photo.bottom() - 24, photo.width() - 24, 18),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             detail,
         )
-        painter.setClipping(False)
-        painter.setPen(QPen(QColor(255, 186, 110, 120), 1.2))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(rect, 18, 18)
+        painter.fillRect(rect.left() + 2, rect.top() + 2, 6, 6, QColor("#E8873A"))
+        painter.fillRect(rect.right() - 8, rect.top() + 2, 6, 6, QColor("#E8873A"))
         painter.end()
 
 
@@ -1335,13 +1328,20 @@ class LauncherWindow(GradientWindow):
         note = getattr(self, "_repair_note", "") or ""
         launched = f"Minecraft {version} запущен{where}."
         self._set_status((note + " " + launched).strip() if note else launched)
+        self._crash_checks = 0
         QTimer.singleShot(1500, self._check_process)
 
     def _check_process(self) -> None:
-        if self._proc is None or self._proc.poll() is None:
+        if self._proc is None:
             return
-        self._set_status(f"Игра сразу закрылась (код {self._proc.returncode}). Лог: {self._log_path}")
-        QMessageBox.warning(self, APP_NAME, "Minecraft закрылся сразу после старта.\n" + self._log_path)
+        if self._proc.poll() is None:
+            self._crash_checks = getattr(self, "_crash_checks", 0) + 1
+            if self._crash_checks < 10:
+                QTimer.singleShot(1500, self._check_process)
+            return
+        message, _disabled = startup_failure(self.minecraft_dir(), self._log_path)
+        self._set_status(message[:240])
+        QMessageBox.warning(self, APP_NAME, message)
 
     def _missing_library(self) -> None:
         QMessageBox.critical(

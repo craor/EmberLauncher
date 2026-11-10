@@ -89,6 +89,24 @@ def main() -> None:
     assert ("forge", "[47,)") in deps
     assert all(item[0] != "superbwarfare" for item in deps)
     assert launcher._compact_id("superb-warfare") == "superbwarfare"
+    assert launcher.preset_from_text("собери выживание")["id"] == "survival"
+    assert launcher.preset_from_text("зомби выживание")["id"] == "zombie"
+    assert launcher.preset_from_text("много животных") is None
+    import tempfile
+    crash_root = pathlib.Path(tempfile.mkdtemp())
+    mods = crash_root / "mods"
+    (crash_root / "logs").mkdir()
+    mods.mkdir()
+    (mods / "Waystones-1.2.jar").write_bytes(b"")
+    (mods / "comforts-1.0.jar").write_bytes(b"")
+    (crash_root / "logs" / "latest.log").write_text(
+        "Loading mod comforts\n[main/ERROR]: Mod waystones requires cloth_config which is missing\n",
+        encoding="utf-8",
+    )
+    note, disabled = launcher.startup_failure(str(crash_root), "")
+    assert disabled == ["Waystones-1.2.jar"], disabled
+    assert "библиотек" in note.lower() or "waystones" in note.lower()
+    assert not (mods / "Waystones-1.2.jar").is_file()
     print("ok")
 
 
