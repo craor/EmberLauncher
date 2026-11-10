@@ -916,6 +916,10 @@ class LauncherWindow(GradientWindow):
             worker.status.connect(self._set_status)
             worker.succeeded.connect(self._on_mods_done)
             worker.failed.connect(self._on_failed)
+        elif isinstance(worker, ModRepairWorker):
+            worker.status.connect(self._set_status)
+            worker.succeeded.connect(self._on_repair_done)
+            worker.failed.connect(self._on_repair_failed)
         elif isinstance(worker, JavaWorker):
             worker.status.connect(self._set_status)
             worker.maximum.connect(self._on_install_max)
@@ -1074,16 +1078,18 @@ class LauncherWindow(GradientWindow):
         self.mod_list.clear()
         present = installed_mod_names(self.minecraft_dir())
         for mod in mods:
-            where = "shaderpacks" if mod.get("folder") == "shaderpacks" else "mods"
             already = mod_already_installed(mod, present)
             mod["installed"] = already
             source = mod.get("source") or ""
+            library = "библиотека · " if mod.get("library") else ""
             if already:
-                item = QListWidgetItem(f"     {mod['title']}  ·  уже установлен")
+                item = QListWidgetItem(f"     {library}{mod['title']}  ·  уже установлен")
                 item.setForeground(QColor("#9dffc8"))
                 item.setBackground(QColor(16, 42, 30))
             else:
-                item = QListWidgetItem(f"{mod['title']}  ·  {where}  ·  {source}")
+                where = "shaderpacks" if mod.get("folder") == "shaderpacks" else "mods"
+                kind = "библиотека" if mod.get("library") else where
+                item = QListWidgetItem(f"{mod['title']}  ·  {kind}  ·  {source}")
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
             item.setCheckState(Qt.CheckState.Checked)
             item.setToolTip(mod.get("blurb") or mod.get("filename") or "")
@@ -1184,19 +1190,34 @@ class LauncherWindow(GradientWindow):
             self._set_status("Java скачана, но java.exe не нашёлся. Нажми «Авто».")
         self.persist()
 
-    def _on_mods_done(self, version: str) -> None:
+    def _on_mods_done(self, payload: str) -> None:
         self._set_busy(False)
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
         self._plan = None
+        version, _sep, note = (payload or "").partition("\n")
         self.refresh_versions()
         if version:
             index = self.version_combo.findText(version)
             if index >= 0:
                 self.version_combo.setCurrentIndex(index)
-        self.plan_label.setText("Моды лежат в папке mods. Шейдеры, если были, в shaderpacks.")
-        self._set_status("Сборка установлена.")
+        if note.strip():
+            self.plan_label.setText(note.strip())
+            self._set_status(note.strip())
+        else:
+            self.plan_label.setText("Моды лежат в папке mods. Шейдеры, если были, в shaderpacks.")
+            self._set_status("Сборка установлена.")
         self.persist()
+
+    def _on_repair_done(self, note: str) -> None:
+        self._repair_note = (note or "").strip()
+        self._set_busy(False)
+        self._launch_prepared(getattr(self, "_pending_server", None))
+
+    def _on_repair_failed(self, _message: str) -> None:
+        self._repair_note = ""
+        self._set_busy(False)
+        self._launch_prepared(getattr(self, "_pending_server", None))
 
     def _validate_nickname(self, nickname: str) -> str:
         if NICK_RE.fullmatch(nickname):
@@ -1232,6 +1253,29 @@ class LauncherWindow(GradientWindow):
             self._set_status("Файл Java не найден.")
             return
         self.persist()
+        loader = infer_loader(version)
+        game = installed_game_version(directory, version) or minecraft_release_from_id(version)
+        mods_dir = os.path.join(directory, "mods")
+        has_jars = os.path.isdir(mods_dir) and any(name.lower().endswith(".jar") for name in os.listdir(mods_dir))
+        if has_jars and loader and game:
+            self._pending_server = server
+            self._repair_note = ""
+            self._start_worker(ModRepairWorker(directory, loader, game))
+            self._set_status("Проверяю библиотеки модов…")
+            return
+        self._launch_prepared(server)
+
+    def _launch_prepared(self, server: str | None = None) -> None:
+        if minecraft_launcher_lib is None:
+            self._missing_library()
+            return
+        if self._proc is not None and self._proc.poll() is None:
+            QMessageBox.information(self, APP_NAME, "Minecraft уже запущен.")
+            return
+        nickname = self.nickname()
+        version = self.version_combo.currentText().strip()
+        directory = self.minecraft_dir()
+        java_path = self.java_path()
         player_uuid = offline_player_uuid(nickname)
         token = "0"
         options: dict = {
@@ -1288,7 +1332,9 @@ class LauncherWindow(GradientWindow):
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
         where = f" на {server}" if server else ""
-        self._set_status(f"Minecraft {version} запущен{where}.")
+        note = getattr(self, "_repair_note", "") or ""
+        launched = f"Minecraft {version} запущен{where}."
+        self._set_status((note + " " + launched).strip() if note else launched)
         QTimer.singleShot(1500, self._check_process)
 
     def _check_process(self) -> None:

@@ -50,6 +50,45 @@ def main() -> None:
     assert launcher.clean_repo("javascript:alert(1)") == ""
     assert launcher.version_numbers("v1.8.1") > launcher.version_numbers("1.8.0")
     assert launcher.DEFAULT_UPDATE_REPO == "craor/EmberLauncher"
+    assert launcher.range_allows("[4.8.0,)", "4.5.8") is False
+    assert launcher.range_allows("[4.8.0,)", "4.8") is True
+    assert launcher.range_allows("[4.8.0,)", "4.8.0") is True
+    assert launcher.range_allows("[4.8.0,)", "4.9.3") is True
+    assert launcher.range_allows("[0.8.0,)", "0.8.9.2-hotfix") is True
+    assert launcher.range_allows("[1.20.1,1.21)", "1.20.1") is True
+    assert launcher.range_allows("[1.20.1,1.21)", "1.21") is False
+    assert launcher.range_allows(">=4.8.0", "4.9.3") is True
+    import io
+    import zipfile
+
+    toml = (
+        'modLoader="javafml"\n'
+        '[[mods]]\n'
+        'modId="wrecked"\n'
+        'version="1.1.2"\n'
+        "description='''Every punk picks up the junk.'''\n"
+        "[[dependencies.wrecked]]\n"
+        'modId="forge"\n'
+        "mandatory=true\n"
+        'versionRange="[47,)"\n'
+        "[[dependencies.wrecked]]\n"
+        'modId="geckolib"\n'
+        "mandatory=true\n"
+        'versionRange="[4.8.0,)"\n'
+        "[[dependencies.wrecked]]\n"
+        'modId="superbwarfare"\n'
+        "mandatory=false\n"
+        'versionRange="[0.8.0,)"\n'
+    )
+    blob = io.BytesIO()
+    with zipfile.ZipFile(blob, "w") as archive:
+        archive.writestr("META-INF/mods.toml", toml)
+    own, deps, _embedded = launcher.read_jar_requirements(blob.getvalue())
+    assert own.get("wrecked") == "1.1.2"
+    assert ("geckolib", "[4.8.0,)") in deps
+    assert ("forge", "[47,)") in deps
+    assert all(item[0] != "superbwarfare" for item in deps)
+    assert launcher._compact_id("superb-warfare") == "superbwarfare"
     print("ok")
 
 

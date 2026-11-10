@@ -500,6 +500,37 @@ def http_download(url: str, dest: str, timeout: int = 180) -> None:
         raise
 
 
+_JAR_CACHE: dict[str, bytes] = {}
+_JAR_CACHE_BYTES = 0
+_LIBRARY_JAR_LIMIT = 64 * 1024 * 1024
+
+
+def http_bytes(url: str, limit: int = _LIBRARY_JAR_LIMIT) -> bytes:
+    cached = _JAR_CACHE.get(url)
+    if cached is not None:
+        return cached
+    _require_https(url, ALLOWED_HOSTS)
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        _require_https(response.geturl(), ALLOWED_HOSTS)
+        chunks: list[bytes] = []
+        copied = 0
+        while True:
+            chunk = response.read(1024 * 256)
+            if not chunk:
+                break
+            copied += len(chunk)
+            if copied > limit:
+                raise ValueError("Архив мода слишком большой, зависимости не прочитал.")
+            chunks.append(chunk)
+    data = b"".join(chunks)
+    global _JAR_CACHE_BYTES
+    if _JAR_CACHE_BYTES < 180 * 1024 * 1024:
+        _JAR_CACHE[url] = data
+        _JAR_CACHE_BYTES += len(data)
+    return data
+
+
 def active_update_repo(config: dict | None = None) -> str:
     if config:
         saved = clean_repo(str(config.get("update_repo") or ""))
@@ -979,6 +1010,986 @@ def modrinth_search_slugs(search_text: str, loader: str, game_version: str | Non
     return slugs
 
 
+_LOADER_IDS = frozenset({
+    "forge", "neoforge", "fabric", "fabricloader", "quilt", "quiltloader", "javafml",
+})
+_PROJECT_CACHE: dict[str, dict | None] = {}
+_SLUG_CACHE: dict[str, str | None] = {}
+_VERS_CACHE: dict[str, list] = {}
+_REQ_CACHE: dict[str, tuple] = {}
+_LIB_CACHE: dict[tuple, dict | None] = {}
+
+
+def _compact_id(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (value or "").lower())
+
+
+def _provided_ids(loader: str) -> set[str]:
+    ids = {"minecraft", "java", "javafml"}
+    if loader == "forge":
+        ids.add("forge")
+    elif loader == "neoforge":
+        ids.add("neoforge")
+    elif loader == "fabric":
+        ids.update({"fabric", "fabricloader", "fabric-resource-loader-v0"})
+    elif loader == "quilt":
+        ids.update({
+            "quilt", "quiltloader", "quilt_resource_loader", "fabric", "fabricloader",
+            "fabric-resource-loader-v0",
+        })
+    return {_compact_id(item) for item in ids}
+
+
+def version_key(value: str) -> tuple:
+    raw = (value or "").strip().lower().split("+", 1)[0]
+    match = re.search(r"\d+(?:\.\d+){0,6}", raw)
+    if not match:
+        return ((0, 0, 0, 0, 0, 0), 1)
+    nums = [int(part) for part in match.group(0).split(".")]
+    while len(nums) < 6:
+        nums.append(0)
+    rest = raw[match.end():]
+    pre = 0 if rest.startswith("-") and not rest.startswith("-final") else 1
+    return (tuple(nums[:6]), pre)
+
+
+def _cmp_versions(left: str, right: str) -> int:
+    a = version_key(left)
+    b = version_key(right)
+    if a[0] != b[0]:
+        return -1 if a[0] < b[0] else 1
+    if a[1] != b[1]:
+        return -1 if a[1] < b[1] else 1
+    return 0
+
+
+def range_allows(spec: str, version: str) -> bool:
+    text = (spec or "").strip()
+    if not text or text in {"*", "any"} or "${" in text:
+        return True
+    if "||" in text:
+        return any(range_allows(part.strip(), version) for part in text.split("||") if part.strip())
+    if text[0] in "[(":
+        return any(_maven_range(part, version) for part in _split_maven_ranges(text))
+    return all(_fabric_clause(part, version) for part in text.split() if part)
+
+
+def _split_maven_ranges(text: str) -> list[str]:
+    ranges: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    for char in text:
+        if char in "[(":
+            depth += 1
+        elif char in "])":
+            depth = max(0, depth - 1)
+        buf.append(char)
+        if depth == 0 and buf:
+            piece = "".join(buf).strip().strip(",")
+            if piece:
+                ranges.append(piece)
+            buf = []
+    tail = "".join(buf).strip().strip(",")
+    if tail:
+        ranges.append(tail)
+    return ranges or [text]
+
+
+def _maven_range(text: str, version: str) -> bool:
+    match = re.match(r"^([\[\(])\s*([^,\]\)]*)\s*,\s*([^,\]\)]*)\s*([\]\)])$", text.strip())
+    if not match:
+        inner = text.strip()
+        if inner and inner[0] in "[(" and inner[-1] in "])" and "," not in inner:
+            return _cmp_versions(version, inner[1:-1].strip()) == 0
+        return True
+    low = match.group(2).strip()
+    high = match.group(3).strip()
+    if low:
+        compared = _cmp_versions(version, low)
+        if compared < 0 or (compared == 0 and match.group(1) != "["):
+            return False
+    if high:
+        compared = _cmp_versions(version, high)
+        if compared > 0 or (compared == 0 and match.group(4) != "]"):
+            return False
+    return True
+
+
+def _fabric_clause(clause: str, version: str) -> bool:
+    text = clause.strip()
+    if not text or text == "*":
+        return True
+    for op in (">=", "<=", ">", "<", "="):
+        if text.startswith(op):
+            other = text[len(op):].strip()
+            compared = _cmp_versions(version, other)
+            if op == ">=":
+                return compared >= 0
+            if op == "<=":
+                return compared <= 0
+            if op == ">":
+                return compared > 0
+            if op == "<":
+                return compared < 0
+            return compared == 0
+    if text[:1] in "~^" or text.endswith((".x", ".*")):
+        base = text[1:] if text[:1] in "~^" else text.rsplit(".", 1)[0]
+        if _cmp_versions(version, base) < 0:
+            return False
+        parts = [int(part) for part in re.findall(r"\d+", base)[:3]] or [0]
+        if text.startswith("^") and parts[0] > 0:
+            ceiling = f"{parts[0] + 1}"
+        else:
+            if len(parts) >= 2:
+                ceiling = f"{parts[0]}.{parts[1] + 1}"
+            else:
+                ceiling = f"{parts[0] + 1}"
+        return _cmp_versions(version, ceiling) < 0
+    return _cmp_versions(version, text) == 0
+
+
+def _spec_ok(spec: str, version: str) -> bool:
+    if not version or "${" in version or version.startswith("$"):
+        return True
+    return range_allows(spec, version)
+
+
+def _strip_toml_comment(line: str) -> str:
+    out: list[str] = []
+    quote = ""
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if quote:
+            out.append(char)
+            if char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char in ("'", '"') and line[index:index + 3] == char * 3:
+            end = line.find(char * 3, index + 3)
+            if end < 0:
+                return line
+            out.append(line[index:end + 3])
+            index = end + 3
+            continue
+        if char in ("'", '"'):
+            quote = char
+            out.append(char)
+            index += 1
+            continue
+        if char == "#":
+            break
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _logical_toml_lines(text: str) -> list[str]:
+    raw_lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    logical: list[str] = []
+    index = 0
+    while index < len(raw_lines):
+        line = raw_lines[index]
+        if line.count("'''") % 2 == 1 or line.count('"""') % 2 == 1:
+            quote = "'''" if line.count("'''") % 2 == 1 else '"""'
+            block = [line]
+            index += 1
+            while index < len(raw_lines) and quote not in raw_lines[index]:
+                block.append(raw_lines[index])
+                index += 1
+            if index < len(raw_lines):
+                block.append(raw_lines[index])
+            logical.append("\n".join(block))
+        else:
+            logical.append(line)
+        index += 1
+    return logical
+
+
+def _toml_value(raw: str) -> str:
+    value = (raw or "").strip()
+    if len(value) >= 6 and value.startswith("'''") and value.endswith("'''"):
+        return value[3:-3]
+    if len(value) >= 6 and value.startswith('"""') and value.endswith('"""'):
+        return value[3:-3]
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1]
+    return value
+
+
+def _add_required(deps: list[tuple[str, str]], mod_id, spec) -> None:
+    name = str(mod_id or "").strip()
+    if not name:
+        return
+    if isinstance(spec, list):
+        spec = spec[0] if spec else "*"
+    if isinstance(spec, dict):
+        spec = spec.get("version") or spec.get("versions") or spec.get("versionRange") or "*"
+    deps.append((name, str(spec or "*").strip() or "*"))
+
+
+def _parse_mods_toml(text: str, own: dict[str, str], deps: list[tuple[str, str]]) -> None:
+    section = ""
+    mod_id = ""
+    mod_ver = ""
+    dep_id = ""
+    dep_spec = "*"
+    dep_ok = True
+
+    def flush_mod() -> None:
+        nonlocal mod_id, mod_ver
+        if mod_id:
+            own.setdefault(mod_id, mod_ver or "0")
+        mod_id = ""
+        mod_ver = ""
+
+    def flush_dep() -> None:
+        nonlocal dep_id, dep_spec, dep_ok
+        if dep_id and dep_ok:
+            deps.append((dep_id, dep_spec or "*"))
+        dep_id = ""
+        dep_spec = "*"
+        dep_ok = True
+
+    for raw in _logical_toml_lines(text):
+        line = _strip_toml_comment(raw).strip()
+        if not line:
+            continue
+        if line.startswith("[[") and line.endswith("]]"):
+            flush_mod()
+            flush_dep()
+            section = line[2:-2].strip()
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            flush_mod()
+            flush_dep()
+            section = line[1:-1].strip()
+            continue
+        if "=" not in line:
+            continue
+        key, raw_value = line.split("=", 1)
+        key = key.strip()
+        value = _toml_value(raw_value)
+        if section == "mods":
+            if key == "modId":
+                mod_id = value
+            elif key == "version":
+                mod_ver = value
+        elif section.startswith("dependencies"):
+            if key == "modId":
+                dep_id = value
+            elif key in ("versionRange", "version"):
+                dep_spec = value
+            elif key == "mandatory":
+                dep_ok = value.lower() == "true"
+            elif key == "type":
+                dep_ok = value.lower() in ("required", "mandatory")
+    flush_mod()
+    flush_dep()
+    _parse_inline_mod_tables(text, own, deps)
+
+
+def _skip_quoted(text: str, index: int) -> int:
+    quote = text[index]
+    if text[index:index + 3] == quote * 3:
+        end = text.find(quote * 3, index + 3)
+        return len(text) if end < 0 else end + 3
+    index += 1
+    while index < len(text) and text[index] != quote:
+        if text[index] == "\\":
+            index += 2
+            continue
+        index += 1
+    return min(len(text), index + 1)
+
+
+def _matching_brace(text: str, start: int) -> int:
+    depth = 0
+    index = start
+    while index < len(text):
+        char = text[index]
+        if char in ("'", '"'):
+            index = _skip_quoted(text, index)
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    return -1
+
+
+def _inline_fields(body: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    index = 0
+    size = len(body)
+    while index < size:
+        while index < size and body[index] in " \t\r\n,":
+            index += 1
+        if index >= size:
+            break
+        equals = body.find("=", index)
+        if equals < 0:
+            break
+        key = body[index:equals].strip()
+        index = equals + 1
+        while index < size and body[index] in " \t":
+            index += 1
+        if index >= size or not key:
+            break
+        if body[index] in ("'", '"'):
+            end = _skip_quoted(body, index)
+            raw = body[index:end]
+            fields[key] = _toml_value(raw)
+            index = end
+            continue
+        end = index
+        while end < size and body[end] not in ",\r\n":
+            end += 1
+        fields[key] = body[index:end].strip()
+        index = end
+    return fields
+
+
+def _parse_inline_mod_tables(text: str, own: dict[str, str], deps: list[tuple[str, str]]) -> None:
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char in ("'", '"'):
+            index = _skip_quoted(text, index)
+            continue
+        if char != "{":
+            index += 1
+            continue
+        end = _matching_brace(text, index)
+        if end < 0:
+            break
+        fields = _inline_fields(text[index + 1:end])
+        index = end + 1
+        mod_id = fields.get("modId") or ""
+        if not mod_id:
+            continue
+        kind = (fields.get("type") or "").lower()
+        if "versionRange" in fields or "mandatory" in fields or "ordering" in fields or kind in (
+            "required", "optional", "incompatible", "discouraged", "mandatory"
+        ):
+            required = kind not in ("optional", "incompatible", "discouraged")
+            if (fields.get("mandatory") or "").lower() == "false":
+                required = False
+            if required:
+                deps.append((mod_id, fields.get("versionRange") or fields.get("version") or "*"))
+            continue
+        if "displayName" in fields or "logoFile" in fields or "authors" in fields or "version" in fields:
+            own.setdefault(mod_id, fields.get("version") or "0")
+
+
+def _consume_depends(depends, deps: list[tuple[str, str]]) -> None:
+    if isinstance(depends, dict):
+        for key, value in depends.items():
+            required = True
+            if isinstance(value, dict) and "mandatory" in value:
+                required = bool(value.get("mandatory"))
+            if isinstance(value, dict) and str(value.get("type") or "").lower() in (
+                "optional", "incompatible", "discouraged"
+            ):
+                required = False
+            if required:
+                _add_required(deps, key, value)
+        return
+    if not isinstance(depends, list):
+        return
+    for item in depends:
+        if isinstance(item, str):
+            _add_required(deps, item, "*")
+        elif isinstance(item, dict):
+            required = str(item.get("type") or "required").lower() not in (
+                "optional", "incompatible", "discouraged"
+            )
+            if "mandatory" in item:
+                required = bool(item.get("mandatory"))
+        if required and "unless" not in item:
+            _add_required(
+                deps,
+                item.get("id") or item.get("modId") or item.get("modid"),
+                item.get("version") or item.get("versions") or item.get("versionRange") or "*",
+            )
+
+
+def _parse_json_meta(text: str) -> dict | None:
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _parse_fabric_meta(text: str, own: dict[str, str], deps: list[tuple[str, str]]) -> None:
+    data = _parse_json_meta(text)
+    if not data:
+        return
+    mod_id = str(data.get("id") or "").strip()
+    if mod_id:
+        own.setdefault(mod_id, str(data.get("version") or ""))
+    _consume_depends(data.get("depends"), deps)
+
+
+def _parse_quilt_meta(text: str, own: dict[str, str], deps: list[tuple[str, str]]) -> None:
+    data = _parse_json_meta(text)
+    loader = data.get("quilt_loader") if data else None
+    if not isinstance(loader, dict):
+        return
+    mod_id = str(loader.get("id") or "").strip()
+    if mod_id:
+        own.setdefault(mod_id, str(loader.get("version") or ""))
+    _consume_depends(loader.get("depends"), deps)
+
+
+def _dedupe_deps(deps: list[tuple[str, str]], own: dict[str, str]) -> list[tuple[str, str]]:
+    own_ids = {_compact_id(item) for item in own}
+    result: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for mod_id, spec in deps:
+        cid = _compact_id(mod_id)
+        if not cid or cid in seen or cid in own_ids:
+            continue
+        seen.add(cid)
+        result.append((mod_id, spec))
+    return result
+
+
+def read_jar_requirements(
+    data: bytes, depth: int = 0, loader: str = ""
+) -> tuple[dict[str, str], list[tuple[str, str]], set[str]]:
+    """Свои id мода, обязательные зависимости и id из вложенных jar."""
+    import io
+    import zipfile
+
+    forge_own: dict[str, str] = {}
+    forge_deps: list[tuple[str, str]] = []
+    fabric_own: dict[str, str] = {}
+    fabric_deps: list[tuple[str, str]] = []
+    embedded: set[str] = set()
+    if not data or depth > 2:
+        return {}, [], embedded
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+    except Exception:
+        return {}, [], embedded
+    names = set(archive.namelist())
+
+    def load(path: str) -> str:
+        try:
+            return archive.read(path).decode("utf-8", errors="replace")
+        except Exception:
+            return ""
+
+    if "fabric.mod.json" in names:
+        _parse_fabric_meta(load("fabric.mod.json"), fabric_own, fabric_deps)
+    if "quilt.mod.json" in names:
+        _parse_quilt_meta(load("quilt.mod.json"), fabric_own, fabric_deps)
+    toml_name = ""
+    if loader == "neoforge" and "META-INF/neoforge.mods.toml" in names:
+        toml_name = "META-INF/neoforge.mods.toml"
+    elif "META-INF/mods.toml" in names:
+        toml_name = "META-INF/mods.toml"
+    elif "META-INF/neoforge.mods.toml" in names:
+        toml_name = "META-INF/neoforge.mods.toml"
+    if toml_name:
+        _parse_mods_toml(load(toml_name), forge_own, forge_deps)
+    if depth < 2:
+        for name in archive.namelist():
+            low = name.lower()
+            if not low.endswith(".jar"):
+                continue
+            if not (low.startswith("meta-inf/jarjar/") or low.startswith("meta-inf/jars/")):
+                continue
+            try:
+                nested = archive.read(name)
+            except Exception:
+                continue
+            nested_own, _, nested_embedded = read_jar_requirements(nested, depth + 1, loader)
+            embedded.update(nested_own)
+            embedded.update(nested_embedded)
+    # Forge не читает fabric.mod.json. У датапаков Modrinth там чужие зависимости.
+    if loader in ("forge", "neoforge") and toml_name:
+        own, deps = forge_own, forge_deps
+    elif loader in ("fabric", "quilt") and (fabric_own or "fabric.mod.json" in names or "quilt.mod.json" in names):
+        own, deps = fabric_own, fabric_deps
+    else:
+        own = dict(forge_own)
+        for key, value in fabric_own.items():
+            own.setdefault(key, value)
+        deps = forge_deps + fabric_deps
+    return own, _dedupe_deps(deps, own), embedded
+
+
+def _slug_candidates(mod_id: str) -> list[str]:
+    raw = (mod_id or "").strip().lower().replace("_", "-")
+    compact = _compact_id(raw)
+    found: list[str] = []
+
+    def add(value: str) -> None:
+        value = (value or "").strip("-").lower()
+        if value and value not in found:
+            found.append(value)
+
+    add(raw)
+    add(compact)
+    size = len(compact)
+    if size >= 6:
+        splits = sorted(range(3, size - 2), key=lambda index: (abs(index - size / 2), index))
+        for index in splits[:5]:
+            add(compact[:index] + "-" + compact[index:])
+    for token in ("lib", "api"):
+        index = compact.find(token)
+        if 2 < index < size - 1:
+            add(compact[:index] + "-" + compact[index:])
+    return found[:8]
+
+
+def _library_queries(mod_id: str) -> list[str]:
+    queries: list[str] = []
+    for slug in _slug_candidates(mod_id):
+        if "-" not in slug:
+            continue
+        query = re.sub(r"\s+", " ", slug.replace("-", " ")).strip()
+        if query and query not in queries:
+            queries.append(query)
+    return queries[:4]
+
+
+def _project_meta(slug: str) -> dict | None:
+    if slug in _PROJECT_CACHE:
+        return _PROJECT_CACHE[slug]
+    try:
+        data = http_json(f"https://api.modrinth.com/v2/project/{urllib.parse.quote(slug)}")
+    except Exception:
+        data = None
+    if not isinstance(data, dict) or str(data.get("project_type") or "mod") != "mod":
+        data = None
+    _PROJECT_CACHE[slug] = data
+    return data
+
+
+def _project_matches(meta: dict, mod_id: str) -> bool:
+    wanted = _compact_id(mod_id)
+    if len(wanted) < 3 or not meta:
+        return False
+    return wanted in {_compact_id(str(meta.get("slug") or "")), _compact_id(str(meta.get("title") or ""))}
+
+
+def find_library_slug(mod_id: str, loader: str, game_version: str) -> str | None:
+    compact = _compact_id(mod_id)
+    if compact in _SLUG_CACHE:
+        return _SLUG_CACHE[compact]
+    found = ""
+    for candidate in _slug_candidates(mod_id):
+        meta = _project_meta(candidate)
+        if meta and _project_matches(meta, mod_id):
+            found = str(meta.get("slug") or candidate)
+            break
+    if not found:
+        for query in _library_queries(mod_id):
+            for slug in modrinth_search_slugs(query, loader, game_version, limit=6):
+                meta = _project_meta(slug)
+                if meta and _project_matches(meta, mod_id):
+                    found = str(meta.get("slug") or slug)
+                    break
+            if found:
+                break
+    if not found:
+        for query in _library_queries(mod_id):
+            for slug in modrinth_search_slugs(query, loader, None, limit=6):
+                meta = _project_meta(slug)
+                if meta and _project_matches(meta, mod_id):
+                    found = str(meta.get("slug") or slug)
+                    break
+            if found:
+                break
+    _SLUG_CACHE[compact] = found or None
+    return found or None
+
+
+def _project_versions(slug: str, loader: str) -> list:
+    key = f"{slug}|{loader}"
+    if key in _VERS_CACHE:
+        return _VERS_CACHE[key]
+    try:
+        data = http_json(
+            f"https://api.modrinth.com/v2/project/{urllib.parse.quote(slug)}/version?"
+            + urllib.parse.urlencode({"loaders": json.dumps([loader])})
+        )
+    except Exception:
+        data = []
+    if not isinstance(data, list):
+        data = []
+    _VERS_CACHE[key] = data
+    return data
+
+
+def _library_file(slug: str, loader: str, game_version: str, spec: str) -> dict | None:
+    meta = _project_meta(slug) or {}
+    ranked: list[tuple] = []
+    for version in _project_versions(slug, loader):
+        if not isinstance(version, dict):
+            continue
+        games = {str(item) for item in version.get("game_versions") or []}
+        if game_version not in games:
+            continue
+        number = str(version.get("version_number") or "")
+        if number and not range_allows(spec, number):
+            continue
+        picked = _pick_mod_file(version, allow_zip=False)
+        if not picked:
+            continue
+        release = 0 if version.get("version_type") == "release" else 1
+        key = version_key(number)
+        ranked.append((release, tuple(-part for part in key[0]), -key[1], picked, number))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: item[:3])
+    picked, number = ranked[0][3], ranked[0][4]
+    return {
+        "slug": str(meta.get("slug") or slug),
+        "title": str(meta.get("title") or slug),
+        "filename": picked["filename"],
+        "url": picked["url"],
+        "folder": "mods",
+        "deps": [],
+        "blurb": "Библиотека, без неё мод не запустится.",
+        "source": "Modrinth",
+        "library": True,
+        "version_number": number,
+    }
+
+
+def _inspect_cached(mod: dict, loader: str = "") -> tuple[dict[str, str], list[tuple[str, str]], set[str]] | None:
+    url = str(mod.get("url") or "")
+    if not url:
+        return None
+    key = url + "\n" + loader
+    if key in _REQ_CACHE:
+        return _REQ_CACHE[key]
+    try:
+        parsed = read_jar_requirements(http_bytes(url), loader=loader)
+    except Exception:
+        return None
+    _REQ_CACHE[key] = parsed
+    return parsed
+
+
+def _public_mod(info: dict) -> dict:
+    return {key: value for key, value in info.items() if not str(key).startswith("_")}
+
+
+def resolve_library(mod_id: str, spec: str, loader: str, game_version: str) -> dict | None:
+    key = (_compact_id(mod_id), spec or "", loader, game_version)
+    if key in _LIB_CACHE:
+        cached = _LIB_CACHE[key]
+        return dict(cached) if cached else None
+    found: dict | None = None
+    slug = find_library_slug(mod_id, loader, game_version)
+    if slug:
+        info = _library_file(slug, loader, game_version, spec)
+        parsed = _inspect_cached(info, loader) if info else None
+        if info and parsed:
+            own, _, _embedded = parsed
+            if _compact_id(mod_id) in {_compact_id(item) for item in own}:
+                info["version_number"] = str(info.get("version_number") or next(iter(own.values()), ""))
+                found = info
+    _LIB_CACHE[key] = dict(found) if found else None
+    return dict(found) if found else None
+
+
+def _own_version(info: dict, cid: str) -> str:
+    for mod_id, version in (info.get("_own") or {}).items():
+        if _compact_id(mod_id) == cid:
+            return str(version or "")
+    return ""
+
+
+def _decorate(mod: dict, loader: str = "") -> dict:
+    info = dict(mod)
+    parsed = _inspect_cached(mod, loader)
+    if not parsed:
+        info["_unreadable"] = True
+        info["_own"] = {}
+        info["_deps"] = []
+        info["_ids"] = set()
+        return info
+    own, deps, embedded = parsed
+    info["_own"] = own
+    info["_deps"] = deps
+    info["_ids"] = {_compact_id(item) for item in own} | {_compact_id(item) for item in embedded}
+    return info
+
+
+def close_libraries(mods: list[dict], loader: str, game_version: str) -> tuple[list[dict], list[str]]:
+    """Скачивает библиотеки из jar. Мод без файла библиотеки на эту версию выкидывает."""
+    provided = _provided_ids(loader)
+    shaders = [dict(item) for item in mods if item.get("folder") == "shaderpacks"]
+    parsed = [_decorate(item, loader) for item in mods if item.get("folder") != "shaderpacks"]
+    libraries: dict[str, dict] = {}
+    failed: set[str] = set()
+
+    def version_present(cid: str) -> str:
+        for info in parsed:
+            found = _own_version(info, cid)
+            if found:
+                return found
+        lib = libraries.get(cid)
+        if lib:
+            return str(lib.get("version_number") or _own_version(lib, cid) or "")
+        return ""
+
+    for _wave in range(8):
+        grew = False
+        pool = parsed + list({id(item): item for item in libraries.values()}.values())
+        for info in pool:
+            if info.get("_unreadable"):
+                continue
+            for dep_id, spec in info.get("_deps") or []:
+                cid = _compact_id(dep_id)
+                if len(cid) < 3 or cid in failed or cid in provided:
+                    continue
+                if cid in _LOADER_IDS and cid not in provided:
+                    failed.add(cid)
+                    continue
+                current = version_present(cid)
+                if current and _spec_ok(spec, current):
+                    continue
+                if cid in libraries and _spec_ok(spec, str(libraries[cid].get("version_number") or "")):
+                    continue
+                lib = resolve_library(dep_id, spec, loader, game_version)
+                if not lib or not _spec_ok(spec, str(lib.get("version_number") or "")):
+                    failed.add(cid)
+                    continue
+                decorated = _decorate(lib, loader)
+                decorated["library"] = True
+                decorated["blurb"] = "Библиотека, без неё мод не запустится."
+                decorated["version_number"] = lib.get("version_number") or ""
+                for key_id in decorated.get("_ids") or []:
+                    libraries[key_id] = decorated
+                grew = True
+        if not grew:
+            break
+
+    dropped: list[str] = []
+    changed = True
+    while changed:
+        changed = False
+
+        def satisfied(dep_id: str, spec: str, info: dict) -> bool:
+            cid = _compact_id(dep_id)
+            if cid in provided or cid in (info.get("_ids") or ()):
+                return True
+            lib = libraries.get(cid)
+            if lib and _spec_ok(spec, str(lib.get("version_number") or _own_version(lib, cid))):
+                return True
+            for other in parsed:
+                version = _own_version(other, cid)
+                if version and _spec_ok(spec, version):
+                    return True
+                if cid in (other.get("_ids") or ()) and (not version or _spec_ok(spec, version)):
+                    return True
+            return False
+
+        next_parsed = []
+        for info in parsed:
+            if info.get("_unreadable"):
+                next_parsed.append(info)
+                continue
+            missing = [dep_id for dep_id, spec in info.get("_deps") or [] if not satisfied(dep_id, spec, info)]
+            if missing:
+                dropped.append(str(info.get("title") or info.get("slug") or "мод"))
+                changed = True
+            else:
+                next_parsed.append(info)
+        parsed = next_parsed
+        needed: set[str] = set()
+        stack = [
+            _compact_id(dep_id)
+            for info in parsed
+            for dep_id, _spec in info.get("_deps") or []
+        ]
+        while stack:
+            cid = stack.pop()
+            lib = libraries.get(cid)
+            if not lib or cid in needed:
+                continue
+            needed.update(lib.get("_ids") or ())
+            needed.add(cid)
+            stack.extend(_compact_id(dep_id) for dep_id, _spec in lib.get("_deps") or [])
+        for cid in list(libraries):
+            if cid not in needed:
+                libraries.pop(cid, None)
+                changed = True
+
+    unique_libs: list[dict] = []
+    seen: set[str] = set()
+    for info in libraries.values():
+        slug = str(info.get("slug") or info.get("filename") or "")
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        unique_libs.append(_public_mod(info))
+    result = [_public_mod(info) for info in parsed] + unique_libs + shaders
+    return result, dropped
+
+
+def infer_loader(version_id: str) -> str:
+    value = (version_id or "").lower()
+    if "neoforge" in value:
+        return "neoforge"
+    if "quilt" in value:
+        return "quilt"
+    if "fabric" in value:
+        return "fabric"
+    if "forge" in value:
+        return "forge"
+    return ""
+
+
+def _write_library(folder: str, lib: dict) -> str:
+    filename = safe_filename(str(lib.get("filename") or ""))
+    if not filename:
+        raise ValueError("Пустое имя библиотеки.")
+    dest = os.path.join(folder, filename)
+    if os.path.isfile(dest):
+        return dest
+    url = str(lib.get("url") or "")
+    data = _JAR_CACHE.get(url)
+    temporary = dest + ".part"
+    if data:
+        with open(temporary, "wb") as handle:
+            handle.write(data)
+        os.replace(temporary, dest)
+        return dest
+    http_download(url, dest)
+    return dest
+
+
+def finish_mod_folder(directory: str, loader: str, game_version: str, status=None) -> str:
+    """Докачивает библиотеки уже установленных модов и отключает те, которым их нет."""
+    if loader not in ("forge", "neoforge", "fabric", "quilt") or not game_version:
+        return ""
+    folder = os.path.join(directory, "mods")
+    if not os.path.isdir(folder):
+        return ""
+    entries: list[dict] = []
+    for name in sorted(os.listdir(folder)):
+        if not name.lower().endswith(".jar"):
+            continue
+        path = os.path.join(folder, name)
+        try:
+            with open(path, "rb") as handle:
+                data = handle.read(_LIBRARY_JAR_LIMIT + 1)
+        except OSError:
+            continue
+        if len(data) > _LIBRARY_JAR_LIMIT:
+            continue
+        own, deps, embedded = read_jar_requirements(data, loader=loader)
+        entries.append({
+            "path": path,
+            "name": name,
+            "own": own,
+            "deps": deps,
+            "ids": {_compact_id(item) for item in own} | {_compact_id(item) for item in embedded},
+        })
+    if not entries:
+        return ""
+    provided = _provided_ids(loader)
+    added: list[str] = []
+    failed: set[str] = set()
+
+    def provides(dep_id: str, spec: str, pool: list[dict] | None = None) -> bool:
+        cid = _compact_id(dep_id)
+        if cid in provided:
+            return True
+        for entry in entries if pool is None else pool:
+            for mod_id, version in entry["own"].items():
+                if _compact_id(mod_id) == cid and _spec_ok(spec, str(version or "")):
+                    return True
+            if cid in entry["ids"] and not any(_compact_id(mod_id) == cid for mod_id in entry["own"]):
+                return True
+        return False
+
+    for _wave in range(6):
+        grew = False
+        for entry in list(entries):
+            for dep_id, spec in entry["deps"]:
+                cid = _compact_id(dep_id)
+                if len(cid) < 3 or cid in failed or provides(dep_id, spec):
+                    continue
+                if cid in _LOADER_IDS and cid not in provided:
+                    failed.add(cid)
+                    continue
+                if status:
+                    status(f"Ищу библиотеку {dep_id}")
+                lib = resolve_library(dep_id, spec, loader, game_version)
+                if not lib:
+                    failed.add(cid)
+                    continue
+                try:
+                    dest = _write_library(folder, lib)
+                    with open(dest, "rb") as handle:
+                        blob = handle.read(_LIBRARY_JAR_LIMIT + 1)
+                    own, deps, embedded = read_jar_requirements(blob, loader=loader)
+                except Exception:
+                    failed.add(cid)
+                    continue
+                if _compact_id(dep_id) not in {_compact_id(item) for item in own}:
+                    failed.add(cid)
+                    continue
+                entries.append({
+                    "path": dest,
+                    "name": os.path.basename(dest),
+                    "own": own,
+                    "deps": deps,
+                    "ids": {_compact_id(item) for item in own} | {_compact_id(item) for item in embedded},
+                })
+                title = str(lib.get("title") or dep_id)
+                if title not in added:
+                    added.append(title)
+                grew = True
+        if not grew:
+            break
+
+    disabled: list[str] = []
+    changed = True
+    alive = entries
+    while changed:
+        changed = False
+        next_alive = []
+        for entry in alive:
+            missing = [dep_id for dep_id, spec in entry["deps"] if not provides(dep_id, spec, alive)]
+            if not missing:
+                next_alive.append(entry)
+                continue
+            dest = entry["path"] + ".disabled"
+            try:
+                os.replace(entry["path"], dest)
+            except OSError:
+                next_alive.append(entry)
+                continue
+            disabled.append(entry["name"])
+            changed = True
+        alive = next_alive
+    notes: list[str] = []
+    if added:
+        notes.append("Добавил библиотеки: " + ", ".join(added[:8]) + ".")
+    if disabled:
+        notes.append(
+            "Отключил моды без нужной библиотеки на этой версии: "
+            + ", ".join(disabled[:8])
+            + ". Файлы переименованы в .disabled, игра запустится без них."
+        )
+    return " ".join(notes)
+
+
 def build_pack(
     query: str,
     loader: str,
@@ -1055,16 +2066,23 @@ def build_pack(
         return found, shader_slugs
 
     def gather(active_loader: str, active_version: str, found: list[str], shader_slugs: list[str]) -> tuple[list[dict], list[str]]:
-        queue: list[tuple[str, bool]] = [(slug, False) for slug in found] + [(slug, True) for slug in shader_slugs]
+        queue: list[tuple[str, bool, bool]] = (
+            [(slug, False, False) for slug in found] + [(slug, True, False) for slug in shader_slugs]
+        )
         seen: set[str] = set()
         mods_found: list[dict] = []
         missed: list[str] = []
         limit = 16 if preset else 10
-        while queue and len(mods_found) < limit:
-            slug, shader = queue.pop(0)
+        while queue and len(mods_found) < limit + 12:
+            slug, shader, from_dep = queue.pop(0)
             if slug in seen:
                 continue
             seen.add(slug)
+            content_count = sum(
+                1 for item in mods_found if not item.get("from_dep") and item.get("folder") != "shaderpacks"
+            )
+            if not shader and not from_dep and content_count >= limit:
+                continue
             try:
                 info = resolve_project(slug, active_loader, active_version, shader=shader, sources=sources)
             except Exception:
@@ -1076,43 +2094,89 @@ def build_pack(
             if any(item["slug"] == info["slug"] for item in mods_found):
                 continue
             seen.add(info["slug"])
+            if from_dep:
+                info["from_dep"] = True
             mods_found.append(info)
             if not shader:
                 for dep in info.get("deps") or []:
                     if dep.get("dependency_type") != "required":
                         continue
                     project_id = str(dep.get("project_id") or "")
-                    if project_id and project_id not in seen and len(mods_found) + len(queue) < limit + 4:
-                        queue.append((project_id, False))
+                    if project_id and project_id not in seen and len(queue) < 24:
+                        queue.append((project_id, False, True))
         return mods_found, missed
 
-    mods: list[dict] = []
-    skipped: list[str] = []
-    for active_loader in loader_order:
-        for active in attempts:
-            found, shader_slugs = slugs_for(active_loader, active)
-            if not found and not shader_slugs:
-                continue
-            mods, skipped = gather(active_loader, active, found, shader_slugs)
-            if mods:
-                mod_loader = active_loader
-                game_version = active
+    best: tuple | None = None
+    saw_mods = False
+
+    def consider(active_loader: str, active: str) -> bool:
+        nonlocal best, saw_mods
+        found, shader_slugs = slugs_for(active_loader, active)
+        if not found and not shader_slugs:
+            return False
+        gathered, skipped_now = gather(active_loader, active, found, shader_slugs)
+        if not gathered:
+            return False
+        saw_mods = True
+        try:
+            closed, dropped = close_libraries(gathered, active_loader, active)
+        except Exception:
+            closed, dropped = gathered, []
+        content_left = [
+            item for item in closed if not item.get("library") and item.get("folder") != "shaderpacks"
+        ]
+        if not content_left and not any(item.get("folder") == "shaderpacks" for item in closed):
+            return False
+        score = (
+            1 if not dropped else 0,
+            len(content_left),
+            -len(dropped),
+            1 if active == asked_version else 0,
+            1 if active_loader == asked_loader else 0,
+        )
+        if best is None or score > best[0]:
+            best = (score, active_loader, active, closed, skipped_now, dropped)
+        return bool(content_left) or any(item.get("folder") == "shaderpacks" for item in closed)
+
+    if not consider(asked_loader, asked_version):
+        checked = 0
+        for active_loader in loader_order:
+            if best is not None and best[0][0] == 1:
                 break
-        if mods:
-            break
-    if not mods:
+            for active in attempts:
+                if active_loader == asked_loader and active == asked_version:
+                    continue
+                if checked >= 3:
+                    break
+                checked += 1
+                consider(active_loader, active)
+                if best is not None and best[0][0] == 1:
+                    break
+    if best is None:
+        if saw_mods:
+            raise RuntimeError(
+                f"Моды нашлись, но нужных библиотек нет для {asked_loader} {asked_version}. "
+                "Попробуй другую версию той же линии, например 1.21.1, или другой загрузчик."
+            )
         raise RuntimeError(
             f"По запросу на {asked_version} ({asked_loader}) ничего не нашлось с 1.19.2 и новее. "
             "Напиши иначе или выбери Fabric, NeoForge, 1.20.1 или 1.21.1."
         )
+    _score, mod_loader, game_version, mods, skipped, dropped = best
     names = ", ".join(item["title"] for item in mods[:16])
     extra = ""
     if loader == "optifine":
         extra = " OptiFine моды почти не грузит, поэтому набор под Forge."
-    if mod_loader != asked_loader:
-        extra += f" На {asked_loader} файлов не было, поэтому загрузчик {mod_loader}."
-    if game_version != asked_version:
-        extra += f" На {asked_version} файлов не нашлось, поэтому взял {game_version}."
+    if mod_loader != asked_loader or game_version != asked_version:
+        extra += (
+            f" На {asked_version} ({asked_loader}) библиотеки модов не сошлись, "
+            f"поэтому взял {game_version} ({mod_loader})."
+        )
+    libs = [item["title"] for item in mods if item.get("library")]
+    if libs:
+        extra += " Библиотеки, без которых моды не запустятся: " + ", ".join(libs[:10]) + "."
+    if dropped:
+        extra += " Не ставлю, библиотеки не выложены на эту версию: " + ", ".join(dropped[:8]) + "."
     if skipped:
         extra += " Часть модов не нашлась именно на этой версии и пропущена."
     labels = [name for key, name in (("modrinth", "Modrinth"), ("curseforge", "CurseForge")) if key in sources]

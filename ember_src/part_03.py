@@ -380,9 +380,44 @@ class ModInstallWorker(QThread):
                 self.status.emit(f"Качаю {index}/{len(self.plan['mods'])}: {mod['title']}")
                 if not os.path.isfile(dest):
                     http_download(mod["url"], dest)
-            self.succeeded.emit(installed_version)
+            note = ""
+            try:
+                note = finish_mod_folder(
+                    self.directory,
+                    str(self.plan.get("loader") or ""),
+                    str(self.plan.get("game_version") or ""),
+                    status=lambda text: self.status.emit(text),
+                )
+            except Exception:
+                note = ""
+            self.succeeded.emit(installed_version + ("\n" + note if note else ""))
         except Exception as exc:
             self.failed.emit(str(exc))
+
+
+class ModRepairWorker(QThread):
+    status = pyqtSignal(str)
+    succeeded = pyqtSignal(str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, directory: str, loader: str, game_version: str) -> None:
+        super().__init__()
+        self.directory = directory
+        self.loader = loader
+        self.game_version = game_version
+
+    def run(self) -> None:
+        try:
+            note = finish_mod_folder(
+                self.directory,
+                self.loader,
+                self.game_version,
+                status=lambda text: self.status.emit(text),
+            )
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+        self.succeeded.emit(note or "")
 
 
 class JavaWorker(QThread):
