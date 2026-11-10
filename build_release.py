@@ -88,16 +88,15 @@ def main() -> None:
         "PyInstaller",
         "--noconfirm",
         "--clean",
+        "--onefile",
         "--windowed",
         "--name",
         "EmberLauncher",
     ]
     if sys.platform == "darwin":
         command.extend(["--icon", "icon.icns", "--osx-bundle-identifier", "ember.launcher"])
-    else:
-        command.append("--onefile")
-        if os.name == "nt":
-            command.extend(["--icon", "icon.ico"])
+    elif os.name == "nt":
+        command.extend(["--icon", "icon.ico"])
     command.extend([
         "--add-data",
         f"icon.ico{sep}.",
