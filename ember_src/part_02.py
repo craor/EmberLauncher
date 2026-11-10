@@ -357,7 +357,7 @@ def loader_from_text(text: str, fallback: str) -> str:
 def clean_search_text(text: str) -> str:
     cleaned = _GAME_VERSION_RE.sub(" ", text or "")
     cleaned = re.sub(
-        r"\b(fabric|forge|neoforge|quilt|optifine|vanilla|фабрик|форж|неофорж|квилт|оптифайн|ваниль|версия|версии|сделай|мне|сборку|сборка|моды|мод)\b",
+        r"\b(fabric|forge|neoforge|quilt|optifine|vanilla|фабрик|форж|неофорж|квилт|оптифайн|ваниль|версия|версии|сделай|мне|сборку|сборка|моды|мод|много|хочу|добавь|поставь|игру|там|ещё|еще|очень|просто|какую|какие|нибудь|скачай|поставь)\b",
         " ",
         cleaned,
         flags=re.IGNORECASE,
@@ -369,32 +369,60 @@ SEARCH_HINTS = (
     (("зомби", "zombie", "апокал", "нежить", "орда"), "zombie apocalypse"),
     (("ужас", "хоррор", "horror", "туман"), "horror"),
     (("выжив", "survival", "хардкор"), "survival"),
-    (("оруж", "gun", "стрель"), "guns"),
+    (("оруж", "gun", "стрел", "мушкет", "воен", "солдат", "танк", "арми"), "guns military"),
+    (("живот", "зоо", "питом", "собак", "кош", "лошад", "волк", "ферм"), "animals"),
+    (("динозав",), "dinosaurs"),
     (("дракон", "dragon"), "dragon"),
+    (("машин", "транспорт", "автомоб"), "vehicles"),
     (("рпг", "rpg", "квест"), "rpg adventure"),
     (("реалист",), "realistic"),
     (("моб",), "mobs"),
-    (("строит", "декор"), "building"),
-    (("еда", "ферм"), "food"),
-    (("маг", "magic", "волшеб"), "magic"),
+    (("строит", "декор", "мебел"), "building decoration"),
+    (("еда", "ферм", "готов"), "food cooking"),
+    (("маг", "magic", "волшеб", "закл"), "magic"),
     (("тех", "механ", "create", "завод"), "technology"),
     (("данж", "приключ", "пещер"), "dungeon"),
     (("пвп", "pvp"), "pvp"),
     (("шейд", "shader"), "shader"),
     (("оптим", "фпс", "fps", "лаг"), "performance"),
     (("анимац", "animat"), "animation"),
+    (("природ", "биом", "измер"), "biomes"),
+    (("бос", "boss"), "bosses"),
+    (("пират", "кораб", "океан", "море", "лодк"), "ships"),
+    (("космос", "планет", "ракета"), "space"),
+    (("рыцар", "средневек", "замок"), "medieval"),
+    (("незер", "адск"), "nether"),
+    (("эндер", "the end"), "ender"),
+    (("робот",), "robot"),
+    (("рыб",), "fishing"),
+    (("шахт", "рудник"), "mining"),
 )
 
 
-def english_search_query(text: str) -> str:
+def query_variants(text: str) -> list[str]:
+    """Короткие английские запросы. Несколько слов Modrinth склеивает через И, поэтому каждое слово отдельно."""
     low = (text or "").lower()
-    hints: list[str] = []
+    queries: list[str] = []
+
+    def add(query: str) -> None:
+        query = re.sub(r"\s+", " ", query or "").strip()
+        if query and query.lower() not in {item.lower() for item in queries}:
+            queries.append(query)
+
     for words, query in SEARCH_HINTS:
-        if any(word in low for word in words) and query not in hints:
-            hints.append(query)
+        if any(word in low for word in words):
+            parts = query.split()
+            for part in reversed(parts):
+                add(part)
     cleaned = clean_search_text(text)
-    combined = " ".join(hints + ([cleaned] if cleaned else []))
-    return re.sub(r"\s+", " ", combined).strip()
+    for word in cleaned.split():
+        if re.search(r"[A-Za-z]", word):
+            add(word)
+    return queries[:6]
+
+
+def english_search_query(text: str) -> str:
+    return " ".join(query_variants(text))
 
 
 def resolve_pack_version(query: str, target: str, selected: str, directory: str) -> str:
@@ -555,6 +583,37 @@ def github_release_notes(repo: str) -> list[dict]:
             "body": body[:420] or "Обновление лаунчера.",
         })
     return notes
+
+
+def github_download_total(repo: str) -> int:
+    cleaned = clean_repo(repo)
+    if not cleaned or "/" not in cleaned:
+        return 0
+    owner, name = cleaned.split("/", 1)
+    total = 0
+    page = 1
+    while page <= 3:
+        url = (
+            "https://api.github.com/repos/"
+            f"{urllib.parse.quote(owner)}/{urllib.parse.quote(name)}/releases?per_page=20&page={page}"
+        )
+        payload = http_json(url, timeout=20)
+        if not isinstance(payload, list) or not payload:
+            break
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            for asset in item.get("assets") or []:
+                if not isinstance(asset, dict):
+                    continue
+                try:
+                    total += int(asset.get("download_count") or 0)
+                except (TypeError, ValueError):
+                    continue
+        if len(payload) < 20:
+            break
+        page += 1
+    return total
 
 
 def verify_update_file(path: str, digest: str) -> None:
@@ -838,27 +897,86 @@ def _line_key(version: str) -> tuple | None:
     return None
 
 
+def version_parts(version: str) -> tuple | None:
+    parsed = minecraft_release_from_id(version) or (version or "").strip()
+    bits: list[int] = []
+    for part in parsed.split("."):
+        if not part.isdigit():
+            return None
+        bits.append(int(part))
+    if len(bits) < 2:
+        return None
+    return tuple(bits)
+
+
+def pack_version_allowed(version: str) -> bool:
+    parts = version_parts(version)
+    if not parts:
+        return False
+    if parts[0] >= 20:
+        return True
+    if parts[0] != 1:
+        return False
+    minor = parts[1]
+    patch = parts[2] if len(parts) > 2 else 0
+    if minor > 19:
+        return True
+    if minor < 19:
+        return False
+    if len(parts) == 2:
+        return False
+    return patch >= 2
+
+
 def pack_version_attempts(game_version: str) -> list[str]:
-    """Точная версия, а для «1.21» без патча — соседние релизы той же линии."""
-    raw = (game_version or "").strip()
-    parsed = minecraft_release_from_id(raw) or raw
-    if not parsed:
+    """Точная версия и соседние релизы той же линии, не старше 1.19.2."""
+    parsed = minecraft_release_from_id(game_version) or (game_version or "").strip()
+    if not parsed or not pack_version_allowed(parsed):
         return []
     attempts = [parsed]
-    if len(parsed.split(".")) != 2:
-        return attempts
     key = _line_key(parsed)
-    if key is None:
-        return attempts
-    extras = [item for item in PACK_VERSIONS if _line_key(item) == key and item not in attempts]
+    preferred = {
+        ("1", "19"): ("1.19.2", "1.19.4"),
+        ("1", "20"): ("1.20.1", "1.20.4", "1.20.6", "1.20"),
+        ("1", "21"): ("1.21.1", "1.21.4", "1.21.8", "1.21.11", "1.21"),
+        ("26", "1"): ("26.1",),
+        ("26", "2"): ("26.2",),
+        ("26", "3"): ("26.3",),
+    }
+    for item in preferred.get(key, ()):
+        if item not in attempts and pack_version_allowed(item):
+            attempts.append(item)
+    for item in PACK_VERSIONS:
+        if _line_key(item) == key and item not in attempts and pack_version_allowed(item):
+            attempts.append(item)
+    return attempts[:6]
 
-    def sort_key(item: str) -> tuple:
-        bits = item.split(".")
-        patch = int(bits[2]) if len(bits) > 2 and bits[2].isdigit() else 10**6
-        return (0 if item.endswith(".1") else 1, patch)
 
-    extras.sort(key=sort_key)
-    return attempts + extras[:5]
+def modrinth_search_slugs(search_text: str, loader: str, game_version: str | None, limit: int = 8) -> list[str]:
+    query = (search_text or "").strip()
+    if not query or not loader:
+        return []
+    facets = [["project_type:mod"], [f"categories:{loader}"]]
+    if game_version:
+        facets.append([f"versions:{game_version}"])
+    try:
+        search = http_json(
+            "https://api.modrinth.com/v2/search?"
+            + urllib.parse.urlencode({
+                "query": query,
+                "limit": limit,
+                "index": "relevance",
+                "facets": json.dumps(facets),
+            })
+        )
+    except Exception:
+        return []
+    slugs: list[str] = []
+    for hit in search.get("hits") or []:
+        slug = str(hit.get("slug") or "")
+        if slug and slug not in slugs:
+            slugs.append(slug)
+    return slugs
 
 
 def build_pack(
@@ -874,115 +992,125 @@ def build_pack(
     if mod_loader not in ("fabric", "forge", "neoforge", "quilt"):
         mod_loader = "fabric"
     preset = next((pack for pack in PRESETS if pack["id"] == preset_id), None)
-    slugs: list[str] = []
-    shaders: list[str] = []
-    seen_slugs: set[str] = set()
-    titles: list[str] = []
-    summaries: list[str] = []
-    if preset:
-        titles.append(preset["title"])
-        summaries.append(preset["summary"])
-        for slug in preset.get("mods", {}).get(mod_loader, ()):
-            if slug not in seen_slugs:
-                seen_slugs.add(slug)
-                slugs.append(slug)
-        for slug in preset.get("shaders", ()):
-            if slug not in seen_slugs:
-                seen_slugs.add(slug)
-                shaders.append(slug)
-    else:
-        matched = [pack for pack in CURATED if any(word in low for word in pack["words"])]
-        for pack in matched:
-            titles.append(pack["title"])
-            summaries.append(pack["summary"])
-            for slug in pack.get("mods", {}).get(mod_loader, ()):
-                if slug not in seen_slugs:
-                    seen_slugs.add(slug)
-                    slugs.append(slug)
-            for slug in pack.get("shaders", ()):
-                if slug not in seen_slugs:
-                    seen_slugs.add(slug)
-                    shaders.append(slug)
-        search_text = english_search_query(text) or clean_search_text(text)
-        if search_text and "modrinth" in sources:
-            facets = json.dumps([
-                ["project_type:mod"],
-                [f"categories:{mod_loader}"],
-                [f"versions:{game_version}"],
-            ])
-            try:
-                search = http_json(
-                    "https://api.modrinth.com/v2/search?"
-                    + urllib.parse.urlencode({
-                        "query": search_text,
-                        "limit": 6,
-                        "index": "relevance",
-                        "facets": facets,
-                    })
-                )
-                for hit in search.get("hits") or []:
-                    slug = str(hit.get("slug") or "")
-                    if slug and slug not in seen_slugs:
-                        seen_slugs.add(slug)
-                        slugs.append(slug)
-            except Exception:
-                if not slugs:
-                    raise
+    if not pack_version_allowed(game_version):
+        raise RuntimeError(
+            "Сборки модов ставятся с 1.19.2 и новее, на любой номер: 1.19.2, 1.20.1, 1.21, 1.21.8, 26.3. "
+            "Более старую игру можно скачать, но моды для неё лаунчер не собирает."
+        )
+    attempts = pack_version_attempts(game_version)
+    asked_version = game_version
+    asked_loader = mod_loader
+    search_queries = query_variants(text)
+    search_text = " ".join(search_queries)
+    matched = [] if preset else [pack for pack in CURATED if any(word in low for word in pack["words"])]
+    if not preset and not matched and not search_queries:
+        raise RuntimeError(
+            "Не разобрал тему. Напиши проще: животные, военная, магия, данжи, динозавры, корабли, оптимизация. "
+            "Можно и английское название мода."
+        )
+    titles = [preset["title"]] if preset else [pack["title"] for pack in matched]
+    summaries = [preset["summary"]] if preset else [pack["summary"] for pack in matched]
     if not titles:
-        titles.append("Подбор")
-        summaries.append("По запросу взял совместимые моды с Modrinth, а если их там нет — с CurseForge.")
-    queue_seed: list[tuple[str, bool]] = [(slug, False) for slug in slugs] + [(slug, True) for slug in shaders]
+        shown = text[:48] or "Подбор"
+        titles.append(shown)
+        summaries.append(f"По запросу «{text or search_text}» взял моды с Modrinth, а если их там нет — с CurseForge.")
+    loader_order = [mod_loader]
+    parts = version_parts(game_version) or ()
+    fresh_line = bool(parts) and (parts[0] >= 20 or (parts[0] == 1 and parts[1] >= 21))
+    if mod_loader == "forge" and fresh_line:
+        loader_order.append("neoforge")
 
-    def gather(active_version: str) -> tuple[list[dict], list[str]]:
-        queue = list(queue_seed)
+    def slugs_for(active_loader: str, active_version: str) -> tuple[list[str], list[str]]:
+        found: list[str] = []
+        shader_slugs: list[str] = []
         seen: set[str] = set()
-        found: list[dict] = []
+
+        def add(slug: str, shader: bool = False) -> None:
+            if not slug or slug in seen:
+                return
+            seen.add(slug)
+            if shader:
+                shader_slugs.append(slug)
+            else:
+                found.append(slug)
+
+        source = preset if preset else None
+        packs = [source] if source else matched
+        for pack in packs:
+            if not pack:
+                continue
+            for slug in pack.get("mods", {}).get(active_loader, ()):
+                add(slug)
+            for slug in pack.get("shaders", ()):
+                add(slug, True)
+        if preset or "modrinth" not in sources:
+            return found, shader_slugs
+        for query in search_queries:
+            if len(found) >= 8:
+                break
+            for slug in modrinth_search_slugs(query, active_loader, active_version, limit=5):
+                add(slug)
+                if len(found) >= 8:
+                    break
+        return found, shader_slugs
+
+    def gather(active_loader: str, active_version: str, found: list[str], shader_slugs: list[str]) -> tuple[list[dict], list[str]]:
+        queue: list[tuple[str, bool]] = [(slug, False) for slug in found] + [(slug, True) for slug in shader_slugs]
+        seen: set[str] = set()
+        mods_found: list[dict] = []
         missed: list[str] = []
         limit = 16 if preset else 10
-        while queue and len(found) < limit:
+        while queue and len(mods_found) < limit:
             slug, shader = queue.pop(0)
             if slug in seen:
                 continue
             seen.add(slug)
             try:
-                info = resolve_project(slug, mod_loader, active_version, shader=shader, sources=sources)
+                info = resolve_project(slug, active_loader, active_version, shader=shader, sources=sources)
             except Exception:
                 missed.append(slug)
                 continue
             if not info:
                 missed.append(slug)
                 continue
-            if any(item["slug"] == info["slug"] for item in found):
+            if any(item["slug"] == info["slug"] for item in mods_found):
                 continue
             seen.add(info["slug"])
-            found.append(info)
+            mods_found.append(info)
             if not shader:
                 for dep in info.get("deps") or []:
                     if dep.get("dependency_type") != "required":
                         continue
                     project_id = str(dep.get("project_id") or "")
-                    if project_id and project_id not in seen and len(found) + len(queue) < limit + 4:
+                    if project_id and project_id not in seen and len(mods_found) + len(queue) < limit + 4:
                         queue.append((project_id, False))
-        return found, missed
+        return mods_found, missed
 
-    asked_version = game_version
-    attempts = pack_version_attempts(game_version) or [game_version]
     mods: list[dict] = []
     skipped: list[str] = []
-    for active in attempts:
-        mods, skipped = gather(active)
-        game_version = active
+    for active_loader in loader_order:
+        for active in attempts:
+            found, shader_slugs = slugs_for(active_loader, active)
+            if not found and not shader_slugs:
+                continue
+            mods, skipped = gather(active_loader, active, found, shader_slugs)
+            if mods:
+                mod_loader = active_loader
+                game_version = active
+                break
         if mods:
             break
     if not mods:
         raise RuntimeError(
-            f"Для {asked_version} ({mod_loader}) нет файлов ни на Modrinth, ни на CurseForge. "
-            "Попробуй 1.21.1, 1.20.1 или 26.3."
+            f"По запросу на {asked_version} ({asked_loader}) ничего не нашлось с 1.19.2 и новее. "
+            "Напиши иначе или выбери Fabric, NeoForge, 1.20.1 или 1.21.1."
         )
     names = ", ".join(item["title"] for item in mods[:16])
     extra = ""
     if loader == "optifine":
         extra = " OptiFine моды почти не грузит, поэтому набор под Forge."
+    if mod_loader != asked_loader:
+        extra += f" На {asked_loader} файлов не было, поэтому загрузчик {mod_loader}."
     if game_version != asked_version:
         extra += f" На {asked_version} файлов не нашлось, поэтому взял {game_version}."
     if skipped:
