@@ -47,10 +47,11 @@ def _write_mac_dmg(app: Path, dist: Path) -> Path:
     (staging / "Как открыть.txt").write_text(
         "Ember для Mac с чипом Apple (M1 и новее). На Intel не запустится.\n"
         "\n"
-        "1. Перетащи EmberLauncher в папку «Программы» слева.\n"
-        "2. Открой «Программы», нажми EmberLauncher правой кнопкой и выбери «Открыть».\n"
-        "3. Если система пишет про неизвестного разработчика — ещё раз «Открыть».\n"
-        "4. Первый запуск спросит папку. Ярлык Ember появится на рабочем столе.\n"
+        "1. Если в «Программах» уже есть старый EmberLauncher — замени его.\n"
+        "2. Перетащи EmberLauncher в папку «Программы» слева.\n"
+        "3. Открой «Программы», нажми EmberLauncher правой кнопкой и выбери «Открыть».\n"
+        "4. Если система пишет про неизвестного разработчика — ещё раз «Открыть».\n"
+        "5. Первый запуск спросит папку. Ярлык Ember появится на рабочем столе.\n"
         "\n"
         "Не запускай программу прямо из этого окна: macOS прячет такие файлы, и окно не появляется.\n"
         "Сборка без сертификата Apple.\n",
@@ -88,15 +89,19 @@ def main() -> None:
         "PyInstaller",
         "--noconfirm",
         "--clean",
-        "--onefile",
         "--windowed",
         "--name",
         "EmberLauncher",
     ]
     if sys.platform == "darwin":
+        # --onefile на Mac прыгает в Dock и сразу умирает: система не пускает
+        # распакованный внутренний файл. Папка .app этого не делает.
+        # --collect-all PyQt6 ломает сборку: симлинки framework уже существуют.
         command.extend(["--icon", "icon.icns", "--osx-bundle-identifier", "ember.launcher"])
-    elif os.name == "nt":
-        command.extend(["--icon", "icon.ico"])
+    else:
+        command.append("--onefile")
+        if os.name == "nt":
+            command.extend(["--icon", "icon.ico"])
     command.extend([
         "--add-data",
         f"icon.ico{sep}.",
@@ -106,10 +111,10 @@ def main() -> None:
         f"ember_src{sep}ember_src",
         "--collect-all",
         "minecraft_launcher_lib",
-        "--collect-all",
-        "PyQt6",
-        "launcher.py",
     ])
+    if sys.platform != "darwin":
+        command.extend(["--collect-all", "PyQt6"])
+    command.append("launcher.py")
     subprocess.check_call(command, cwd=ROOT)
     dist = ROOT / "dist"
     if sys.platform == "darwin":

@@ -28,6 +28,35 @@ import urllib.request
 import uuid
 from datetime import datetime
 
+
+def _arm_crash_log() -> None:
+    """Пишет падение до появления окна. На Mac лог: ~/Library/Logs/EmberLauncher/crash.log."""
+    try:
+        if sys.platform == "darwin":
+            folder = pathlib.Path.home() / "Library" / "Logs" / "EmberLauncher"
+        elif os.name == "nt":
+            folder = pathlib.Path(os.environ.get("LOCALAPPDATA") or pathlib.Path.home()) / "EmberLauncher"
+        else:
+            folder = pathlib.Path.home() / ".cache" / "EmberLauncher"
+        folder.mkdir(parents=True, exist_ok=True)
+        handle = open(folder / "crash.log", "w", encoding="utf-8")
+        handle.write("start\n")
+        handle.flush()
+        import faulthandler
+        faulthandler.enable(handle, all_threads=True)
+
+        def hook(exc_type, exc, tb) -> None:
+            handle.write("".join(traceback.format_exception(exc_type, exc, tb)))
+            handle.flush()
+            sys.__excepthook__(exc_type, exc, tb)
+
+        sys.excepthook = hook
+    except Exception:
+        return
+
+
+_arm_crash_log()
+
 try:
     import minecraft_launcher_lib
     from minecraft_launcher_lib.exceptions import UnsupportedVersion, VersionNotFound
@@ -94,8 +123,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-APP_VERSION = "1.8.6"
-USER_AGENT = "EmberLauncher/1.8.6"
+APP_VERSION = "1.8.7"
+USER_AGENT = "EmberLauncher/1.8.7"
 AUTHOR = "craor"
 DEFAULT_UPDATE_REPO = "craor/EmberLauncher"
 
