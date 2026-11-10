@@ -23,7 +23,7 @@ jobs:
       - name: Install
         run: pip install -r requirements.txt
       - name: Compile
-        run: python -m py_compile launcher.py build_release.py make_icon.py tests/test_core.py
+        run: python -m py_compile launcher.py build_release.py make_icon.py tests/test_core.py ember_src/part_01.py ember_src/part_02.py ember_src/part_03.py ember_src/part_04.py ember_src/part_05.py
       - name: Safety checks
         env:
           QT_QPA_PLATFORM: offscreen
@@ -78,13 +78,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python - << 'PY'
-          import re
-          text = open("launcher.py", encoding="utf-8").read()
-          match = re.search(r'APP_VERSION = "([^"]+)"', text)
-          open("version.txt", "w", encoding="utf-8").write(match.group(1))
-          PY
-          TAG="v$(cat version.txt)"
+          python -c 'import re; t=open("launcher.py",encoding="utf-8").read(); m=re.search("APP_VERSION = .([0-9.]+).", t); assert m, "APP_VERSION not found"; open("version.txt","w",encoding="utf-8").write(m.group(1))'
+          TAG="v$(tr -d "\r" < version.txt)"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists"
             exit 0

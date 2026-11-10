@@ -26,7 +26,7 @@ if errorlevel 1 goto :fail
 echo [Ember] Собираю один exe...
 set EXTRA=
 if exist server.json set EXTRA=--add-data "server.json;."
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name EmberLauncher --icon icon.ico --add-data "icon.ico;." --add-data "icon.png;." %EXTRA% --collect-all minecraft_launcher_lib --collect-all PyQt6 launcher.py
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name EmberLauncher --icon icon.ico --add-data "icon.ico;." --add-data "icon.png;." --add-data "ember_src;ember_src" %EXTRA% --collect-all minecraft_launcher_lib --collect-all PyQt6 launcher.py
 if errorlevel 1 goto :fail
 
 echo.
