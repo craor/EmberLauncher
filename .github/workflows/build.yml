@@ -23,7 +23,7 @@ jobs:
       - name: Install
         run: pip install -r requirements.txt
       - name: Compile
-        run: python -m py_compile launcher.py build_release.py make_icon.py tests/test_core.py ember_src/part_01.py ember_src/part_02.py ember_src/part_03.py ember_src/part_04.py ember_src/part_05.py
+        run: python -m py_compile launcher.py build_release.py make_icon.py tests/test_core.py ember_src/part_01.py ember_src/part_01b.py ember_src/part_01c.py ember_src/part_02.py ember_src/part_03.py ember_src/part_04.py ember_src/part_05.py
       - name: Safety checks
         env:
           QT_QPA_PLATFORM: offscreen

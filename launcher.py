@@ -74,6 +74,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -82,14 +83,17 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QProgressBar,
+    QScrollArea,
+    QSizePolicy,
     QSlider,
+    QStackedWidget,
     QStyledItemDelegate,
     QVBoxLayout,
     QWidget,
 )
 
-APP_VERSION = "1.8.0"
-USER_AGENT = "EmberLauncher/1.8"
+APP_VERSION = "1.8.1"
+USER_AGENT = "EmberLauncher/1.8.1"
 AUTHOR = "craor"
 DEFAULT_UPDATE_REPO = "craor/EmberLauncher"
 
