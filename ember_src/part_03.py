@@ -3,10 +3,12 @@
 class EmberButton(QWidget):
     clicked = pyqtSignal()
 
-    def __init__(self, text: str, primary: bool = False, parent: QWidget | None = None) -> None:
+    def __init__(self, text: str, primary: bool = False, parent: QWidget | None = None, *, nav: bool = False) -> None:
         super().__init__(parent)
         self._text = text
         self._primary = primary
+        self._nav = nav
+        self._selected = False
         self._hover = 0.0
         self._pressed = False
         self._anim = QVariantAnimation(self)
@@ -14,15 +16,24 @@ class EmberButton(QWidget):
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._anim.valueChanged.connect(self._on_anim)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(46 if primary else 34)
+        self.setMinimumHeight(42 if nav else (46 if primary else 34))
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setFont(QFont("Segoe UI", 12 if primary else 9, QFont.Weight.Bold if primary else QFont.Weight.DemiBold))
+        weight = QFont.Weight.Bold if primary or nav else QFont.Weight.DemiBold
+        self.setFont(QFont("Segoe UI", 12 if primary else 10, weight))
+        if nav:
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def setSelected(self, selected: bool) -> None:
+        self._selected = bool(selected)
+        self.update()
 
     def setText(self, text: str) -> None:
         self._text = text
         self.update()
 
     def sizeHint(self) -> QSize:
+        if self._nav:
+            return QSize(180, 42)
         width = QFontMetrics(self.font()).horizontalAdvance(self._text) + 28
         return QSize(max(width, 84), 46 if self._primary else 34)
 
@@ -79,6 +90,10 @@ class EmberButton(QWidget):
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self._nav:
+            self._paint_nav(painter)
+            painter.end()
+            return
         rect = self.rect().adjusted(1, 1, -1, -1)
         if rect.width() <= 4 or rect.height() <= 4:
             painter.end()
@@ -112,6 +127,35 @@ class EmberButton(QWidget):
         painter.setFont(self.font())
         painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._text)
         painter.end()
+
+    def _paint_nav(self, painter: QPainter) -> None:
+        rect = QRectF(self.rect().adjusted(2, 2, -2, -2))
+        path = QPainterPath()
+        path.addRoundedRect(rect, 12, 12)
+        if self._selected:
+            fill = QColor(255, 138, 42, 78 + int(40 * self._hover))
+            border = QColor(255, 186, 110, 210)
+        elif self._hover > 0:
+            fill = QColor(255, 255, 255, int(28 * self._hover))
+            border = QColor(255, 176, 90, int(140 * self._hover))
+        else:
+            fill = QColor(0, 0, 0, 0)
+            border = QColor(0, 0, 0, 0)
+        painter.fillPath(path, fill)
+        if border.alpha() > 0:
+            painter.setPen(QPen(border, 1.2))
+            painter.drawPath(path)
+        icon = QRectF(rect.left() + 12, rect.center().y() - 7, 14, 14)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#ff8a2a") if self._selected else QColor(255, 214, 170, 160))
+        painter.drawRoundedRect(icon, 4, 4)
+        painter.setPen(QColor("#fff6ec") if self._selected else QColor("#e6d8c8"))
+        painter.setFont(self.font())
+        painter.drawText(
+            QRectF(icon.right() + 10, rect.top(), rect.width() - 40, rect.height()),
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+            self._text,
+        )
 
 
 class InstallWorker(QThread):
