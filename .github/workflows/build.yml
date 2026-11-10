@@ -39,7 +39,7 @@ jobs:
             artifact: EmberLauncher.exe
           - os: ubuntu-22.04
             artifact: EmberLauncher-linux
-          - os: macos-14
+          - os: macos-15
             artifact: EmberLauncher-macOS.zip
     runs-on: ${{ matrix.os }}
     steps:
