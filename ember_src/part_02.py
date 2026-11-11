@@ -83,6 +83,15 @@ def load_config() -> dict:
         "target_version": "26.3",
         "accounts": [],
         "update_repo": "",
+        "llm_provider": "off",
+        "ollama_model": "qwen2.5:3b",
+        "ollama_url": "http://127.0.0.1:11434",
+        "openrouter_model": "meta-llama/llama-3.2-3b-instruct:free",
+        "active_instance": "",
+        "assistant_optimize": True,
+        "ram_auto": True,
+        "linux_compat": "auto",
+        "mac_thread": "auto",
     }
     try:
         with open(config_path(), "r", encoding="utf-8") as handle:
@@ -104,6 +113,23 @@ def load_config() -> dict:
     defaults["loader"] = str(defaults["loader"] or "fabric")
     defaults["target_version"] = str(defaults["target_version"] or "26.3")
     defaults["update_repo"] = clean_repo(str(stored.get("update_repo") or ""))
+    provider = str(defaults.get("llm_provider") or "off")
+    defaults["llm_provider"] = provider if provider in ("off", "ollama", "deepseek", "openrouter") else "off"
+    ollama_model = str(defaults.get("ollama_model") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", ollama_model):
+        defaults["ollama_model"] = "qwen2.5:3b"
+    router_model = str(defaults.get("openrouter_model") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_.:/-]{1,80}", router_model):
+        defaults["openrouter_model"] = "meta-llama/llama-3.2-3b-instruct:free"
+    defaults["ollama_url"] = str(defaults.get("ollama_url") or "http://127.0.0.1:11434")
+    instance_name = str(defaults.get("active_instance") or "")
+    defaults["active_instance"] = instance_name if re.fullmatch(r"[a-z0-9-]{1,48}", instance_name) else ""
+    defaults["assistant_optimize"] = stored.get("assistant_optimize") is not False
+    defaults["ram_auto"] = stored.get("ram_auto") is not False
+    linux_mode = str(defaults.get("linux_compat") or "auto")
+    defaults["linux_compat"] = linux_mode if linux_mode in {"auto", "wayland", "x11", "nvidia", "mesa", "openal"} else "auto"
+    mac_mode = str(defaults.get("mac_thread") or "auto")
+    defaults["mac_thread"] = mac_mode if mac_mode in {"auto", "always", "never"} else "auto"
     accounts: list[str] = []
     raw_accounts = stored.get("accounts")
     if isinstance(raw_accounts, list):
@@ -455,10 +481,13 @@ def prefer_javaw(command: list[str]) -> list[str]:
     return command
 
 
-def mac_launch_command(command: list[str], platform_name: str = "") -> list[str]:
-    """На Mac окно Minecraft открывается только с главного потока. Иначе игра умирает до меню."""
+def mac_launch_command(command: list[str], platform_name: str = "", thread_mode: str = "auto") -> list[str]:
+    """Флаг главного потока нужен, когда Java не является Cocoa-процессом. Режим «never» его убирает."""
     if (platform_name or sys.platform) != "darwin" or not command:
         return command
+    mode = thread_mode if thread_mode in {"auto", "always", "never"} else "auto"
+    if mode == "never":
+        return [arg for arg in command if arg != "-XstartOnFirstThread"]
     extras: list[str] = []
     if "-XstartOnFirstThread" not in command:
         extras.append("-XstartOnFirstThread")
@@ -568,11 +597,16 @@ def prune_mac_natives(directory: str, java_arch: str) -> None:
                 pass
 
 
-def prepare_mac_game_command(command: list[str], platform_name: str = "", java_arch: str = "") -> list[str]:
+def prepare_mac_game_command(
+    command: list[str],
+    platform_name: str = "",
+    java_arch: str = "",
+    thread_mode: str = "auto",
+) -> list[str]:
     plat = platform_name or sys.platform
     if plat != "darwin" or not command:
         return command
-    command = mac_launch_command(list(command), plat)
+    command = mac_launch_command(list(command), plat, thread_mode)
     arch = java_arch or _java_mach_arch(command[0])
     prepared: list[str] = []
     index = 0
@@ -649,8 +683,11 @@ def write_mac_game_bundle(command: list[str], cwd: str, log_file: str) -> str:
     return folder
 
 
-def game_process_env() -> dict[str, str]:
+def game_process_env(compat: str = "") -> dict[str, str]:
     env = os.environ.copy()
+    if sys.platform.startswith("linux"):
+        apply_linux_compat(env, compat or "auto")
+        return env
     if sys.platform != "darwin":
         return env
     for key in list(env):
@@ -1043,7 +1080,13 @@ def _pick_mod_file(version: dict, allow_zip: bool) -> dict | None:
     if not filename or not url.startswith("https://cdn.modrinth.com/"):
         return None
     if filename.endswith(".jar") or (allow_zip and filename.endswith(".zip")):
-        return {"filename": filename, "url": url}
+        hashes = chosen.get("hashes") if isinstance(chosen.get("hashes"), dict) else {}
+        return {
+            "filename": filename,
+            "url": url,
+            "sha1": str(hashes.get("sha1") or ""),
+            "sha512": str(hashes.get("sha512") or ""),
+        }
     return None
 
 
@@ -1076,6 +1119,8 @@ def resolve_modrinth(slug: str, loader: str, game_version: str, shader: bool = F
             "title": str(meta.get("title") or slug),
             "filename": picked["filename"],
             "url": picked["url"],
+            "sha1": picked.get("sha1") or "",
+            "sha512": picked.get("sha512") or "",
             "folder": "shaderpacks" if is_shader else "mods",
             "deps": version.get("dependencies") or [],
             "blurb": str(meta.get("description") or "").strip(),
@@ -1185,6 +1230,16 @@ def version_parts(version: str) -> tuple | None:
     return tuple(bits)
 
 
+def library_game_versions(game_version: str) -> list[str]:
+    """Точный номер и соседние релизы той же линии. GeckoLib для 1.21 часто лежит только как 1.21.1."""
+    found: list[str] = []
+    for item in [game_version, *pack_version_attempts(game_version)]:
+        item = (item or "").strip()
+        if item and item not in found:
+            found.append(item)
+    return found[:6]
+
+
 def pack_version_allowed(version: str) -> bool:
     parts = version_parts(version)
     if not parts:
@@ -1258,6 +1313,11 @@ def modrinth_search_slugs(search_text: str, loader: str, game_version: str | Non
 _LOADER_IDS = frozenset({
     "forge", "neoforge", "fabric", "fabricloader", "quilt", "quiltloader", "javafml",
 })
+_LIBRARY_SLUGS = {
+    "superbwarfare": "superb-warfare",
+    "clothconfig": "cloth-config",
+    "architectury": "architectury-api",
+}
 _PROJECT_CACHE: dict[str, dict | None] = {}
 _SLUG_CACHE: dict[str, str | None] = {}
 _VERS_CACHE: dict[str, list] = {}
@@ -1831,11 +1891,17 @@ def find_library_slug(mod_id: str, loader: str, game_version: str) -> str | None
     if compact in _SLUG_CACHE:
         return _SLUG_CACHE[compact]
     found = ""
-    for candidate in _slug_candidates(mod_id):
-        meta = _project_meta(candidate)
+    alias = _LIBRARY_SLUGS.get(compact)
+    if alias:
+        meta = _project_meta(alias)
         if meta and _project_matches(meta, mod_id):
-            found = str(meta.get("slug") or candidate)
-            break
+            found = str(meta.get("slug") or alias)
+    if not found:
+        for candidate in _slug_candidates(mod_id):
+            meta = _project_meta(candidate)
+            if meta and _project_matches(meta, mod_id):
+                found = str(meta.get("slug") or candidate)
+                break
     if not found:
         for query in _library_queries(mod_id):
             for slug in modrinth_search_slugs(query, loader, game_version, limit=6):
@@ -1877,12 +1943,14 @@ def _project_versions(slug: str, loader: str) -> list:
 
 def _library_file(slug: str, loader: str, game_version: str, spec: str) -> dict | None:
     meta = _project_meta(slug) or {}
+    allowed = library_game_versions(game_version)
     ranked: list[tuple] = []
     for version in _project_versions(slug, loader):
         if not isinstance(version, dict):
             continue
         games = {str(item) for item in version.get("game_versions") or []}
-        if game_version not in games:
+        overlap = [item for item in allowed if item in games]
+        if not overlap:
             continue
         number = str(version.get("version_number") or "")
         if number and not range_allows(spec, number):
@@ -1890,18 +1958,21 @@ def _library_file(slug: str, loader: str, game_version: str, spec: str) -> dict 
         picked = _pick_mod_file(version, allow_zip=False)
         if not picked:
             continue
+        closeness = min(allowed.index(item) for item in overlap)
         release = 0 if version.get("version_type") == "release" else 1
         key = version_key(number)
-        ranked.append((release, tuple(-part for part in key[0]), -key[1], picked, number))
+        ranked.append((closeness, release, tuple(-part for part in key[0]), -key[1], picked, number))
     if not ranked:
         return None
-    ranked.sort(key=lambda item: item[:3])
-    picked, number = ranked[0][3], ranked[0][4]
+    ranked.sort(key=lambda item: item[:4])
+    picked, number = ranked[0][4], ranked[0][5]
     return {
         "slug": str(meta.get("slug") or slug),
         "title": str(meta.get("title") or slug),
         "filename": picked["filename"],
         "url": picked["url"],
+        "sha1": picked.get("sha1") or "",
+        "sha512": picked.get("sha512") or "",
         "folder": "mods",
         "deps": [],
         "blurb": "Библиотека, без неё мод не запустится.",
@@ -2112,8 +2183,10 @@ def _write_library(folder: str, lib: dict) -> str:
         with open(temporary, "wb") as handle:
             handle.write(data)
         os.replace(temporary, dest)
+        verify_mod_file(dest, lib)
         return dest
     http_download(url, dest)
+    verify_mod_file(dest, lib)
     return dest
 
 
@@ -2369,6 +2442,7 @@ def build_pack(
     game_version: str,
     preset_id: str = "",
     sources: tuple[str, ...] = ("modrinth", "curseforge"),
+    free_search: bool = False,
 ) -> dict:
     text = (query or "").strip()
     low = text.lower()
@@ -2376,7 +2450,7 @@ def build_pack(
     if mod_loader not in ("fabric", "forge", "neoforge", "quilt"):
         mod_loader = "fabric"
     preset = next((pack for pack in PRESETS if pack["id"] == preset_id), None)
-    if preset is None:
+    if preset is None and not free_search:
         preset = preset_from_text(text)
     if not pack_version_allowed(game_version):
         raise RuntimeError(

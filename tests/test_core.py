@@ -57,6 +57,28 @@ def main() -> None:
         raise SystemExit("панели без кожи и пергамента")
     if "paint_material" not in (ROOT / "ember_src" / "part_03.py").read_text(encoding="utf-8"):
         raise SystemExit("текстуры не рисуются")
+    sample = launcher.parse_assistant_json(
+        '```json\n{"game_version":"1.20.1","loader":"fabric","queries":["performance","graphics"],'
+        '"kind":"graphics","shaders":true,"mods":["удали-систему"]}\n```'
+    )
+    if sample["game_version"] != "1.20.1" or sample["loader"] != "fabric" or "удали-систему" in str(sample):
+        raise SystemExit("нейросеть смогла протащить лишнее")
+    if launcher.conflicts_with("oculus", {"iris"}) != "iris":
+        raise SystemExit("конфликт шейдерных модов не пойман")
+    rules = launcher.intent_without_model("хочу оптимизацию и красивую графику на 1.20.1", "fabric", "1.21.1")
+    if rules["game_version"] != "1.20.1" or not rules["shaders"]:
+        raise SystemExit("запасной разбор не понял графику и версию")
+    if launcher._loopback_ollama("http://127.0.0.1:11434") != "http://127.0.0.1:11434/api/chat":
+        raise SystemExit("Ollama ушла не на этот компьютер")
+    try:
+        launcher._loopback_ollama("http://example.com/api/chat")
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("Ollama приняла чужой адрес")
+    folder = ROOT / "ember_src" / "textures"
+    if not (folder / "wood.b64").is_file():
+        raise SystemExit("нет текстур")
 
     assert launcher.clean_repo("https://github.com/craor/EmberLauncher.git") == "craor/EmberLauncher"
     assert launcher.clean_repo("javascript:alert(1)") == ""
@@ -148,11 +170,68 @@ def main() -> None:
     assert not any(part.endswith("natives-macos.jar") for part in prepared_cp.split(":"))
     assert any(part.endswith("natives-macos-arm64.jar") for part in prepared_cp.split(":"))
     assert launcher.prepare_mac_game_command(["java", "-version"], "linux") == ["java", "-version"]
-    import struct
-    import tempfile
-    binary = pathlib.Path(tempfile.mkdtemp()) / "liblwjgl.dylib"
-    binary.write_bytes(struct.pack("<II", 0xFEEDFACF, 0x0100000C) + b"\0" * 32)
-    assert launcher.macho_cpus(str(binary)) == {"arm64"}
+    line = launcher.library_game_versions("1.21")
+    assert line[0] == "1.21" and "1.21.1" in line and "1.20.1" not in line
+    launcher._PROJECT_CACHE["geckolib"] = {
+        "slug": "geckolib",
+        "title": "GeckoLib",
+        "project_type": "mod",
+    }
+    launcher._VERS_CACHE["geckolib|forge"] = [{
+        "game_versions": ["1.21.1"],
+        "version_number": "4.9.3",
+        "version_type": "release",
+        "files": [{
+            "primary": True,
+            "filename": "geckolib-forge-1.21.1-4.9.3.jar",
+            "url": "https://cdn.modrinth.com/data/geckolib/versions/x/geckolib-forge-1.21.1-4.9.3.jar",
+            "hashes": {},
+        }],
+    }]
+    sibling = launcher._library_file("geckolib", "forge", "1.21", "[4.9.0,)")
+    assert sibling and sibling["version_number"] == "4.9.3"
+    launcher._VERS_CACHE["geckolib|forge"] = [{
+        "game_versions": ["1.20.1"],
+        "version_number": "4.4.0",
+        "version_type": "release",
+        "files": [{
+            "primary": True,
+            "filename": "geckolib-forge-1.20.1-4.4.jar",
+            "url": "https://cdn.modrinth.com/data/geckolib/versions/x/geckolib-forge-1.20.1-4.4.jar",
+            "hashes": {},
+        }],
+    }]
+    assert launcher._library_file("geckolib", "forge", "1.21", "*") is None
+    assert launcher.suggested_ram_gb(0, 8) == 2
+    assert launcher.suggested_ram_gb(48, 16) >= 6
+    assert launcher.suggested_ram_gb(48, 4) == 2
+    natives = ";".join(("lwjgl-natives-windows.jar", "lwjgl-natives-windows-arm64.jar"))
+    kept = launcher.filter_native_classpath(natives, "x64", ";")
+    assert "arm64" not in kept and kept.endswith("natives-windows.jar")
+    pack_root = pathlib.Path(tempfile.mkdtemp())
+    packs = pack_root / "resourcepacks"
+    packs.mkdir()
+    blob = io.BytesIO()
+    with zipfile.ZipFile(blob, "w") as archive:
+        archive.writestr("pack.mcmeta", '{"pack":{"pack_format":99,"description":"new"}}')
+    (packs / "TooNew.zip").write_bytes(blob.getvalue())
+    disabled_packs = launcher.disable_incompatible_packs(str(pack_root), "1.20.1")
+    assert disabled_packs and not (packs / "TooNew.zip").is_file()
+    assert (packs / "TooNew.zip.disabled").is_file()
+    java_root = pathlib.Path(tempfile.mkdtemp())
+    (java_root / "versions" / "demo").mkdir(parents=True)
+    (java_root / "versions" / "demo" / "demo.json").write_text(
+        '{"id":"demo","javaVersion":{"component":"java-runtime-delta","majorVersion":21}}',
+        encoding="utf-8",
+    )
+    assert launcher.java_requirement(str(java_root), "demo") == ("java-runtime-delta", 21)
+    crash_dir = pathlib.Path(tempfile.mkdtemp())
+    (crash_dir / "logs").mkdir()
+    (crash_dir / "logs" / "latest.log").write_text(
+        "java.lang.OutOfMemoryError: Java heap space\n",
+        encoding="utf-8",
+    )
+    assert launcher.crash_fix_kind(str(crash_dir), "") == "ram"
     print("ok")
 
 

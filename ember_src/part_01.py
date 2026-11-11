@@ -106,6 +106,8 @@ ALLOWED_HOSTS = frozenset({
     "objects.githubusercontent.com",
     "release-assets.githubusercontent.com",
     "github-releases.githubusercontent.com",
+    "api.deepseek.com",
+    "openrouter.ai",
 })
 INSTALLED_ROLE = Qt.ItemDataRole.UserRole + 1
 _GAME_VERSION_RE = re.compile(

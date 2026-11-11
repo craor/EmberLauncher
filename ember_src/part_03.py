@@ -257,6 +257,8 @@ class PackWorker(QThread):
         game_version: str,
         preset_id: str = "",
         sources: tuple[str, ...] = ("modrinth", "curseforge"),
+        assist: bool = False,
+        settings: dict | None = None,
     ) -> None:
         super().__init__()
         self.query = query
@@ -264,16 +266,21 @@ class PackWorker(QThread):
         self.game_version = game_version
         self.preset_id = preset_id
         self.sources = sources
+        self.assist = assist
+        self.settings = dict(settings or {})
 
     def run(self) -> None:
         try:
-            plan = build_pack(
-                self.query,
-                self.loader,
-                self.game_version,
-                preset_id=self.preset_id,
-                sources=self.sources,
-            )
+            if self.assist:
+                plan = assist_build(self.query, self.loader, self.game_version, self.settings)
+            else:
+                plan = build_pack(
+                    self.query,
+                    self.loader,
+                    self.game_version,
+                    preset_id=self.preset_id,
+                    sources=self.sources,
+                )
         except Exception as exc:
             self.failed.emit(network_error(exc))
             return
@@ -359,6 +366,12 @@ class ModInstallWorker(QThread):
     def run(self) -> None:
         installed_version = ""
         try:
+            root = self.directory
+            instance_name = str(self.plan.get("instance_name") or "") if self.plan.get("isolated") else ""
+            if instance_name:
+                root = prepare_instance(self.directory, instance_name)
+                backup_instance(root)
+                self.status.emit("Сделал бэкап профиля, основная папка mods не трогается.")
             if self.install_loader:
                 self.status.emit(f"Ставлю {self.plan['loader']} {self.plan['game_version']}")
                 if not hasattr(minecraft_launcher_lib, "mod_loader"):
@@ -374,26 +387,42 @@ class ModInstallWorker(QThread):
                     callback={"setStatus": set_status, "setProgress": lambda _v: None, "setMax": lambda _v: None},
                     java=self.java_path or "java",
                 ))
+            shader_file = ""
             for index, mod in enumerate(self.plan["mods"], start=1):
                 if mod.get("installed"):
                     self.status.emit(f"Уже стоит: {mod['title']}")
                     continue
-                folder = os.path.join(self.directory, mod["folder"])
+                folder_name = "shaderpacks" if mod.get("folder") == "shaderpacks" else "mods"
+                folder = os.path.join(root, folder_name)
                 os.makedirs(folder, exist_ok=True)
-                dest = os.path.join(folder, mod["filename"])
+                filename = safe_filename(str(mod.get("filename") or ""))
+                if not filename:
+                    raise RuntimeError(f"У «{mod.get('title') or 'мода'}» плохое имя файла.")
+                dest = os.path.join(folder, filename)
                 self.status.emit(f"Качаю {index}/{len(self.plan['mods'])}: {mod['title']}")
                 if not os.path.isfile(dest):
                     http_download(mod["url"], dest)
+                verify_mod_file(dest, mod)
+                if folder_name == "shaderpacks":
+                    shader_file = filename
+            if instance_name and shader_file:
+                write_shader_choice(root, shader_file)
+                self.status.emit("Прописал шейдерпак в настройках Iris и Oculus.")
             note = ""
             try:
                 note = finish_mod_folder(
-                    self.directory,
+                    root,
                     str(self.plan.get("loader") or ""),
                     str(self.plan.get("game_version") or ""),
                     status=lambda text: self.status.emit(text),
                 )
             except Exception:
                 note = ""
+            if instance_name:
+                write_instance_meta(root, self.plan, installed_version)
+                note = (note + " " if note else "") + "Сборка лежит в отдельном профиле. Основная игра не изменена."
+                self.succeeded.emit(installed_version + ("\n" + note if note else "") + "\n__instance__=" + os.path.basename(root))
+                return
             self.succeeded.emit(installed_version + ("\n" + note if note else ""))
         except Exception as exc:
             self.failed.emit(network_error(exc))
@@ -422,6 +451,31 @@ class ModRepairWorker(QThread):
             self.failed.emit(network_error(exc))
             return
         self.succeeded.emit(note or "")
+
+
+class FileCheckWorker(QThread):
+    status = pyqtSignal(str)
+    succeeded = pyqtSignal(str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, directory: str, version_id: str) -> None:
+        super().__init__()
+        self.directory = directory
+        self.version_id = version_id
+
+    def run(self) -> None:
+        try:
+            self.status.emit("Сверяю клиент и библиотеки…")
+            bad = mismatched_game_files(self.directory, self.version_id)
+        except Exception as exc:
+            self.failed.emit(network_error(exc))
+            return
+        if not bad:
+            self.succeeded.emit("Файлы клиента и библиотек совпадают с контрольными суммами.")
+            return
+        shown = ", ".join(bad[:6])
+        tail = "" if len(bad) <= 6 else f" и ещё {len(bad) - 6}"
+        self.succeeded.emit(f"Не сходятся {len(bad)} файлов: {shown}{tail}. Скачай эту версию ещё раз.")
 
 
 class JavaWorker(QThread):
@@ -510,7 +564,7 @@ class DownloadDialog(QDialog):
     def paintEvent(self, event) -> None:
         del event
         painter = QPainter(self)
-        paint_material(painter, self.rect(), "leather", 36)
+        paint_material(painter, self.rect(), "stone-bricks", 28)
         painter.end()
 
     def showEvent(self, event) -> None:
@@ -632,15 +686,17 @@ def paint_tiled(painter: QPainter, rect, name: str) -> bool:
         return False
     painter.save()
     painter.setClipRect(rect)
-    width = pix.width()
-    height = pix.height()
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+    ratio = float(pix.devicePixelRatio() or 1)
+    width = max(1, int(round(pix.width() / ratio)))
+    height = max(1, int(round(pix.height() / ratio)))
     y = rect.top()
     bottom = rect.bottom()
     right = rect.right()
     while y <= bottom:
         x = rect.left()
         while x <= right:
-            painter.drawPixmap(int(x), int(y), pix)
+            painter.drawPixmap(QRectF(int(x), int(y), width, height), pix)
             x += width
         y += height
     painter.restore()
@@ -1002,7 +1058,7 @@ class PackMenuDialog(QDialog):
     def paintEvent(self, event) -> None:
         del event
         painter = QPainter(self)
-        paint_material(painter, self.rect(), "leather", 28)
+        paint_material(painter, self.rect(), "stone-bricks", 28)
         painter.end()
 
     def showEvent(self, event) -> None:

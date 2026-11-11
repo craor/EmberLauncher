@@ -274,7 +274,7 @@ class LauncherWindow(GradientWindow):
         self.ram_slider = QSlider(Qt.Orientation.Horizontal)
         self.ram_slider.setRange(1, 16)
         self.ram_slider.setValue(int(self._config["ram_gb"]))
-        self.ram_slider.valueChanged.connect(lambda value: self.ram_value.setText(f"{int(value)} ГБ"))
+        self.ram_slider.valueChanged.connect(self._on_ram_slider)
         setup_layout.addLayout(ram_head)
         setup_layout.addWidget(self.ram_slider)
         self.ram_value.setText(f"{self.ram_slider.value()} ГБ")
@@ -315,6 +315,72 @@ class LauncherWindow(GradientWindow):
         dir_row.addWidget(self.root_btn)
         dir_row.addWidget(self.mods_btn)
         setup_layout.addLayout(dir_row)
+        setup_layout.addWidget(self._section("ПОМОЩНИК СБОРОК"))
+        helper = QLabel("Нейросеть только понимает фразу. Моды и шейдеры ищет сам лаунчер на Modrinth. Ключ в список настроек не пишется.")
+        helper.setObjectName("muted")
+        helper.setWordWrap(True)
+        setup_layout.addWidget(helper)
+        self.llm_provider = QComboBox()
+        self.llm_provider.addItem("Без нейросети, готовые подборки", "off")
+        self.llm_provider.addItem("Ollama на этом компьютере", "ollama")
+        self.llm_provider.addItem("DeepSeek, свой ключ", "deepseek")
+        self.llm_provider.addItem("OpenRouter, свой ключ", "openrouter")
+        saved_provider = self.llm_provider.findData(self._config.get("llm_provider") or "off")
+        if saved_provider >= 0:
+            self.llm_provider.setCurrentIndex(saved_provider)
+        setup_layout.addWidget(self.llm_provider)
+        self.ollama_model = QLineEdit(str(self._config.get("ollama_model") or "qwen2.5:3b"))
+        self.ollama_model.setPlaceholderText("Модель Ollama, например qwen2.5:3b или llama3.1:8b")
+        setup_layout.addWidget(self.ollama_model)
+        self.openrouter_model = QLineEdit(str(self._config.get("openrouter_model") or ""))
+        self.openrouter_model.setPlaceholderText("Модель OpenRouter, бесплатные обычно кончаются на :free")
+        setup_layout.addWidget(self.openrouter_model)
+        key_row = QHBoxLayout()
+        self.llm_key = QLineEdit()
+        self.llm_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.llm_key.setPlaceholderText("Ключ DeepSeek или OpenRouter, один раз")
+        self.save_key_btn = EmberButton("Запомнить ключ")
+        self.save_key_btn.clicked.connect(self.save_llm_key)
+        key_row.addWidget(self.llm_key, 1)
+        key_row.addWidget(self.save_key_btn)
+        setup_layout.addLayout(key_row)
+        self.optimize_check = QCheckBox("Добавлять оптимизацию, если она есть на эту версию")
+        self.optimize_check.setChecked(self._config.get("assistant_optimize") is not False)
+        setup_layout.addWidget(self.optimize_check)
+        setup_layout.addWidget(self._section("ЗАПУСК"))
+        launch_row = QHBoxLayout()
+        self.linux_compat = QComboBox()
+        for mode, label in (
+            ("auto", "Linux: авто"),
+            ("x11", "Linux: X11"),
+            ("wayland", "Linux: Wayland"),
+            ("nvidia", "Linux: NVIDIA"),
+            ("mesa", "Linux: Mesa"),
+            ("openal", "Linux: звук Pulse"),
+        ):
+            self.linux_compat.addItem(label, mode)
+        saved_compat = self.linux_compat.findData(self._config.get("linux_compat") or "auto")
+        if saved_compat >= 0:
+            self.linux_compat.setCurrentIndex(saved_compat)
+        self.mac_thread = QComboBox()
+        for mode, label in (
+            ("auto", "Mac: поток авто"),
+            ("always", "Mac: главный поток"),
+            ("never", "Mac: без флага"),
+        ):
+            self.mac_thread.addItem(label, mode)
+        saved_thread = self.mac_thread.findData(self._config.get("mac_thread") or "auto")
+        if saved_thread >= 0:
+            self.mac_thread.setCurrentIndex(saved_thread)
+        self.gpu_btn = EmberButton("Мощная видеокарта")
+        self.gpu_btn.clicked.connect(self.prefer_gpu)
+        self.check_files_btn = EmberButton("Проверить файлы")
+        self.check_files_btn.clicked.connect(self.check_game_files)
+        launch_row.addWidget(self.linux_compat, 1)
+        launch_row.addWidget(self.mac_thread, 1)
+        launch_row.addWidget(self.gpu_btn)
+        launch_row.addWidget(self.check_files_btn)
+        setup_layout.addLayout(launch_row)
         setup_layout.addStretch(1)
 
         news = QWidget()
@@ -377,7 +443,7 @@ class LauncherWindow(GradientWindow):
         footer_row.addWidget(self.play_btn)
         center_layout.addWidget(footer)
 
-        right = MaterialFrame("leather", 40)
+        right = MaterialFrame("mossy", 48)
         right.setObjectName("sidePanel")
         right.setFixedWidth(360)
         right_layout = QVBoxLayout(right)
@@ -388,7 +454,7 @@ class LauncherWindow(GradientWindow):
         self.pack_target = QLabel("Сборка")
         self.pack_target.setObjectName("packTarget")
         self.pack_target.setWordWrap(True)
-        packs_hint = QLabel("С 1.19.2 любой запрос, не только кнопки: «много животных», «военная».")
+        packs_hint = QLabel("Напиши, что хочешь: «оптимизация и красивая графика на 1.20.1». Галка — ставить, снятая галка — убрать.")
         packs_hint.setObjectName("muted")
         packs_hint.setWordWrap(True)
         right_layout.addWidget(packs_title)
@@ -422,6 +488,8 @@ class LauncherWindow(GradientWindow):
             "weapons": "Оружие",
             "machines": "Механизмы",
             "magic": "Магия",
+            "optimize": "Оптимизация",
+            "vanilla_plus": "Ванильное+",
         }
         for index, pack in enumerate(PRESETS):
             button = EmberButton(short_names.get(pack["id"], pack["title"]))
@@ -442,7 +510,7 @@ class LauncherWindow(GradientWindow):
         ask_row.addWidget(self.ask_edit, 1)
         ask_row.addWidget(self.ask_btn)
         body_layout.addLayout(ask_row)
-        self.plan_label = QLabel("Свой текст ищет моды с 1.19.2. Зелёная галка — файл уже лежит в mods.")
+        self.plan_label = QLabel("Запрос разберётся сам. Перед установкой будет список: галка значит «будет установлено».")
         self.plan_label.setObjectName("muted")
         self.plan_label.setWordWrap(True)
         body_layout.addWidget(self.plan_label)
@@ -460,14 +528,23 @@ class LauncherWindow(GradientWindow):
         self.install_pack_btn.setEnabled(False)
         body_layout.addWidget(self.install_pack_btn)
         choice = QHBoxLayout()
-        self.skip_pack_btn = EmberButton("Не ставить")
+        self.drop_mods_btn = EmberButton("Убрать снятые")
+        self.drop_mods_btn.setShrinkable(True)
+        self.drop_mods_btn.clicked.connect(self.drop_unchecked_mods)
+        self.drop_mods_btn.setEnabled(False)
+        self.skip_pack_btn = EmberButton("Отмена")
         self.skip_pack_btn.setShrinkable(True)
         self.skip_pack_btn.clicked.connect(self.skip_pack)
         self.skip_pack_btn.setEnabled(False)
+        self.rollback_btn = EmberButton("Откатить")
+        self.rollback_btn.setShrinkable(True)
+        self.rollback_btn.clicked.connect(self.rollback_active_instance)
         self.packs_btn = EmberButton("Все сборки")
         self.packs_btn.setShrinkable(True)
         self.packs_btn.clicked.connect(self.open_pack_menu)
+        choice.addWidget(self.drop_mods_btn)
         choice.addWidget(self.skip_pack_btn)
+        choice.addWidget(self.rollback_btn)
         choice.addWidget(self.packs_btn)
         body_layout.addLayout(choice)
         scroll.setWidget(body)
@@ -764,6 +841,19 @@ class LauncherWindow(GradientWindow):
         self.ask_edit.setEnabled(not busy)
         self.mod_list.setEnabled(not busy)
         self.install_loader_check.setEnabled(not busy)
+        extra = getattr(self, "drop_mods_btn", None)
+        if extra is not None and busy:
+            extra.setEnabled(False)
+        rollback = getattr(self, "rollback_btn", None)
+        if rollback is not None:
+            rollback.setEnabled(not busy)
+        key_button = getattr(self, "save_key_btn", None)
+        if key_button is not None:
+            key_button.setEnabled(not busy)
+        for name in ("gpu_btn", "check_files_btn"):
+            button = getattr(self, name, None)
+            if button is not None:
+                button.setEnabled(not busy)
         if busy:
             self.install_pack_btn.setEnabled(False)
             self.skip_pack_btn.setEnabled(False)
@@ -780,6 +870,15 @@ class LauncherWindow(GradientWindow):
             "loader": self.loader_id(),
             "target_version": self.target_edit.text().strip(),
             "update_repo": clean_repo(str(self._config.get("update_repo") or "")),
+            "llm_provider": str(self.llm_provider.currentData() or "off"),
+            "ollama_model": self.ollama_model.text().strip() or "qwen2.5:3b",
+            "ollama_url": "http://127.0.0.1:11434",
+            "openrouter_model": self.openrouter_model.text().strip() or "meta-llama/llama-3.2-3b-instruct:free",
+            "active_instance": str(self._config.get("active_instance") or ""),
+            "assistant_optimize": bool(self.optimize_check.isChecked()),
+            "ram_auto": self._config.get("ram_auto") is not False,
+            "linux_compat": str(self.linux_compat.currentData() or "auto"),
+            "mac_thread": str(self.mac_thread.currentData() or "auto"),
         }
 
     def persist(self) -> None:
@@ -921,6 +1020,10 @@ class LauncherWindow(GradientWindow):
             worker.progress.connect(self._on_install_progress)
             worker.succeeded.connect(self._on_java_done)
             worker.failed.connect(self._on_failed)
+        elif isinstance(worker, FileCheckWorker):
+            worker.status.connect(self._set_status)
+            worker.succeeded.connect(self._on_files_checked)
+            worker.failed.connect(self._on_failed)
         elif isinstance(worker, UpdateCheckWorker):
             worker.ready.connect(self._on_update_info)
             worker.failed.connect(self._on_failed if self._update_manual else self._quiet_update_failed)
@@ -975,10 +1078,13 @@ class LauncherWindow(GradientWindow):
         if loader_index >= 0:
             self.loader_combo.setCurrentIndex(loader_index)
         game_version = self._pack_version(query)
-        self.plan_label.setText(f"Смотрю Modrinth и CurseForge для {game_version} · {loader}…")
+        self.plan_label.setText(f"Разбираю запрос и ищу на Modrinth: {game_version} · {loader}…")
         self.mod_list.clear()
         self._plan = None
-        self._start_worker(PackWorker(query, loader, game_version))
+        self.install_pack_btn.setEnabled(False)
+        self.skip_pack_btn.setEnabled(False)
+        self.drop_mods_btn.setEnabled(False)
+        self._start_worker(PackWorker(query, loader, game_version, assist=True, settings=self.assistant_settings()))
 
     def check_for_update(self, manual: bool) -> None:
         if self._busy:
@@ -1069,22 +1175,53 @@ class LauncherWindow(GradientWindow):
             choice["sources"],
         ))
 
+    def assistant_settings(self) -> dict:
+        self.persist()
+        return {
+            "llm_provider": str(self._config.get("llm_provider") or "off"),
+            "ollama_model": str(self._config.get("ollama_model") or ""),
+            "ollama_url": "http://127.0.0.1:11434",
+            "openrouter_model": str(self._config.get("openrouter_model") or ""),
+            "assistant_optimize": self._config.get("assistant_optimize") is not False,
+        }
+
+    def save_llm_key(self) -> None:
+        provider = str(self.llm_provider.currentData() or "off")
+        name = "deepseek" if provider == "deepseek" else "openrouter" if provider == "openrouter" else ""
+        if not name:
+            self._set_status("Ключ нужен только для DeepSeek или OpenRouter. Ollama работает без ключа.")
+            return
+        try:
+            where = secret_set(name, self.llm_key.text())
+        except ValueError as exc:
+            self._set_status(str(exc))
+            return
+        self.llm_key.clear()
+        self._set_status(f"Ключ записан: {where}. В настройках и в логе его нет.")
+
     def _fill_mod_list(self, mods: list) -> None:
         self.mod_list.clear()
-        present = installed_mod_names(self.minecraft_dir())
+        directory = self.minecraft_dir()
+        if self._plan and self._plan.get("isolated") and self._plan.get("instance_name"):
+            try:
+                directory = instance_dir(directory, str(self._plan["instance_name"]))
+            except ValueError:
+                directory = self.minecraft_dir()
+        present = installed_mod_names(directory) if os.path.isdir(directory) else set()
         for mod in mods:
             already = mod_already_installed(mod, present)
             mod["installed"] = already
             source = mod.get("source") or ""
+            support = f"{mod.get('support')} · " if mod.get("support") else ""
             library = "библиотека · " if mod.get("library") else ""
             if already:
-                item = QListWidgetItem(f"     {library}{mod['title']}  ·  уже установлен")
+                item = QListWidgetItem(f"     {support}{library}{mod['title']}  ·  уже в профиле")
                 item.setForeground(QColor("#9dffc8"))
                 item.setBackground(QColor(16, 42, 30))
             else:
                 where = "shaderpacks" if mod.get("folder") == "shaderpacks" else "mods"
                 kind = "библиотека" if mod.get("library") else where
-                item = QListWidgetItem(f"{mod['title']}  ·  {kind}  ·  {source}")
+                item = QListWidgetItem(f"{support}{mod['title']}  ·  {kind}  ·  {source}")
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
             item.setCheckState(Qt.CheckState.Checked)
             item.setToolTip(mod.get("blurb") or mod.get("filename") or "")
@@ -1115,20 +1252,55 @@ class LauncherWindow(GradientWindow):
         self._fill_mod_list(plan.get("mods") or [])
         installed_count = sum(1 for mod in plan.get("mods") or [] if mod.get("installed"))
         if installed_count:
-            note += f" Зелёным отмечено уже установленное: {installed_count}. Их заново не качаю."
-        self.plan_label.setText(f"{plan['title']} · {plan['loader']} · {plan['game_version']}\n{plan['summary']}{note}")
+            note += f" Уже лежащие в профиле: {installed_count}. Их заново не качаю."
+        where = "Отдельный профиль." if plan.get("isolated") else "Обычная папка mods."
+        self.plan_label.setText(
+            f"Будет установлено · {plan['title']} · {plan['loader']} · {plan['game_version']}\n"
+            f"{plan['summary']}{note} {where} Сними галку и нажми «Убрать снятые», если мод не нужен."
+        )
         self.install_loader_check.setChecked(bool(plan["install_loader"]))
+        self.install_pack_btn.setText("Установить всё" if plan.get("isolated") else "В папку mods")
         self.install_pack_btn.setEnabled(True)
         self.skip_pack_btn.setEnabled(True)
-        self._set_status(f"Сборка для {plan['game_version']}. Сними лишние галки и нажми «В mods».")
+        self.drop_mods_btn.setEnabled(True)
+        self._set_status(f"Список для {plan['game_version']} готов. Ничего не скачано, пока не нажмёшь установку.")
 
     def skip_pack(self) -> None:
         self._plan = None
         self.mod_list.clear()
         self.install_pack_btn.setEnabled(False)
         self.skip_pack_btn.setEnabled(False)
-        self.plan_label.setText("Ок, ничего не ставил.")
-        self._set_status("Сборку пропустил.")
+        self.drop_mods_btn.setEnabled(False)
+        self.plan_label.setText("Отмена. Ничего не ставил.")
+        self._set_status("Сборку отменил.")
+
+    def drop_unchecked_mods(self) -> None:
+        if not self._plan:
+            return
+        keep: list[dict] = []
+        for index in range(self.mod_list.count()):
+            item = self.mod_list.item(index)
+            if item is None or item.checkState() != Qt.CheckState.Checked:
+                continue
+            slug = str(item.data(Qt.ItemDataRole.UserRole) or "")
+            match = next((mod for mod in self._plan.get("mods") or [] if str(mod.get("slug") or "") == slug), None)
+            if match is not None:
+                keep.append(match)
+        self._plan["mods"] = keep
+        self._fill_mod_list(keep)
+        self._set_status(f"В списке осталось {len(keep)}. Это и будет установлено.")
+
+    def rollback_active_instance(self) -> None:
+        name = str(self._config.get("active_instance") or "")
+        if not name:
+            self._set_status("Активного профиля нет, откатывать нечего.")
+            return
+        try:
+            source = rollback_instance(self.minecraft_dir(), name)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._set_status(str(exc))
+            return
+        self._set_status("Вернул профиль из бэкапа " + os.path.basename(source) + ".")
 
     def _checked_mods(self, mods: list) -> list:
         wanted: set[str] = set()
@@ -1147,6 +1319,11 @@ class LauncherWindow(GradientWindow):
             self._missing_library()
             return
         plan = dict(self._plan)
+        if plan.get("isolated"):
+            for index in range(self.mod_list.count()):
+                item = self.mod_list.item(index)
+                if item is not None:
+                    item.setCheckState(Qt.CheckState.Checked)
         chosen = self._checked_mods(list(self._plan.get("mods") or []))
         fresh = [mod for mod in chosen if not mod.get("installed")]
         if not chosen:
@@ -1191,6 +1368,11 @@ class LauncherWindow(GradientWindow):
         self.progress.setValue(100)
         self._plan = None
         version, _sep, note = (payload or "").partition("\n")
+        instance_name = ""
+        if "__instance__=" in note:
+            note, _mark, instance_name = note.rpartition("__instance__=")
+            instance_name = instance_slug(instance_name.strip())
+            self._config["active_instance"] = instance_name
         self.refresh_versions()
         if version:
             index = self.version_combo.findText(version)
@@ -1218,6 +1400,32 @@ class LauncherWindow(GradientWindow):
         if NICK_RE.fullmatch(nickname):
             return ""
         return "Ник: 3–16 символов, латиница, цифры и _."
+
+    def _on_ram_slider(self, value: int) -> None:
+        self.ram_value.setText(f"{int(value)} ГБ")
+        if getattr(self, "_ram_hold", False):
+            return
+        self._config["ram_auto"] = False
+
+    def prefer_gpu(self) -> None:
+        java = self.java_path() or find_best_java(self.minecraft_dir())
+        self._set_status(prefer_discrete_gpu(java))
+
+    def check_game_files(self) -> None:
+        if self._busy:
+            return
+        version = self.version_combo.currentText().strip()
+        if not version:
+            self._set_status("Сначала выбери установленную версию.")
+            return
+        self._start_worker(FileCheckWorker(self.minecraft_dir(), version))
+        self._set_status("Сверяю файлы игры…")
+
+    def _on_files_checked(self, note: str) -> None:
+        self._set_busy(False)
+        self.progress.setRange(0, 100)
+        self.progress.setValue(100)
+        self._set_status(note)
 
     def play(self, server: str | None = None) -> None:
         if self._busy:
@@ -1289,6 +1497,58 @@ class LauncherWindow(GradientWindow):
             detected = find_best_java(directory)
             if detected:
                 options["defaultExecutablePath"] = detected
+        instance_name = str(self._config.get("active_instance") or "")
+        game_dir = directory
+        if instance_name:
+            try:
+                folder = instance_dir(directory, instance_name)
+                meta_path = os.path.join(folder, "instance.json")
+                meta = {}
+                if os.path.isfile(meta_path):
+                    with open(meta_path, "r", encoding="utf-8") as handle:
+                        loaded = json.load(handle)
+                    if isinstance(loaded, dict):
+                        meta = loaded
+                wanted = str(meta.get("version_id") or "")
+                game = str(meta.get("game_version") or "")
+                same = version == wanted or version == game or (game and version.endswith("-" + game))
+                if os.path.isdir(folder) and same:
+                    options["gameDirectory"] = folder
+                    game_dir = folder
+                elif os.path.isdir(folder):
+                    self._set_status("Эта версия не из профиля сборки. Запускаю обычную папку игры.")
+            except (OSError, ValueError, json.JSONDecodeError):
+                self._set_status("Профиль сборки не прочитался. Запускаю обычную папку.")
+        game_version = installed_game_version(directory, version) or minecraft_release_from_id(version)
+        self._launch_dir = game_dir
+        self._launch_game = game_version
+        pack_note = ""
+        try:
+            disabled_packs = disable_incompatible_packs(game_dir, game_version)
+        except Exception:
+            disabled_packs = []
+        if disabled_packs:
+            names = ", ".join(item.split(" ", 1)[0] for item in disabled_packs[:4])
+            pack_note = f"Отключил ресурспаки не для этой версии: {names}."
+        if self._config.get("ram_auto") is not False:
+            want = suggested_ram_gb(count_mods(game_dir))
+            if want != int(self.ram_slider.value()):
+                self._ram_hold = True
+                self.ram_slider.setValue(want)
+                self._ram_hold = False
+        java_candidate = java_path or find_best_java(directory)
+        try:
+            _component, needed_major = java_requirement(directory, version)
+        except Exception:
+            needed_major = 0
+        if java_candidate and needed_major:
+            running_major = java_major_version(java_candidate)
+            if running_major and running_major < needed_major:
+                self._set_status(
+                    f"Для этой игры нужна Java {needed_major}, сейчас {running_major}. "
+                    "Во вкладке «Установка» скачай её и нажми «Играть»."
+                )
+                return
         try:
             command = minecraft_launcher_lib.command.get_minecraft_command(version, directory, options)
         except VersionNotFound:
@@ -1306,7 +1566,11 @@ class LauncherWindow(GradientWindow):
                 self._set_status("Java не найдена. Нажми «Авто».")
                 return
             command[0] = replacement
-        command = prepare_mac_game_command(command)
+        command = prepare_mac_game_command(
+            command,
+            thread_mode=str(self._config.get("mac_thread") or "auto"),
+        )
+        command = prepare_native_command(command)
         unlock_downloaded_java(command[0] if command else "", directory, version)
         try:
             self._log_file = open(self._log_path, "a", encoding="utf-8", errors="replace")
@@ -1320,7 +1584,7 @@ class LauncherWindow(GradientWindow):
                 "stdout": self._log_file,
                 "stderr": subprocess.STDOUT,
                 "stdin": subprocess.DEVNULL,
-                "env": game_process_env(),
+                "env": game_process_env(str(self._config.get("linux_compat") or "auto")),
             }
             if os.name == "nt":
                 startup = subprocess.STARTUPINFO()
@@ -1350,7 +1614,7 @@ class LauncherWindow(GradientWindow):
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
         where = f" на {server}" if server else ""
-        note = getattr(self, "_repair_note", "") or ""
+        note = " ".join(part for part in (getattr(self, "_repair_note", "") or "", pack_note) if part)
         launched = f"Minecraft {version} запущен{where}."
         self._set_status((note + " " + launched).strip() if note else launched)
         self._crash_checks = 0
@@ -1374,9 +1638,46 @@ class LauncherWindow(GradientWindow):
                 self._log_file.flush()
         except OSError:
             pass
-        message, _disabled = startup_failure(self.minecraft_dir(), self._log_path)
-        self._set_status(message[:240])
-        QMessageBox.warning(self, APP_NAME, message)
+        game_dir = getattr(self, "_launch_dir", None) or self.minecraft_dir()
+        kind = ""
+        try:
+            kind = crash_fix_kind(game_dir, self._log_path)
+        except Exception:
+            kind = ""
+        extra = ""
+        if kind == "pack":
+            try:
+                names = disable_incompatible_packs(game_dir, getattr(self, "_launch_game", "") or "")
+            except Exception:
+                names = []
+            extra = (
+                " Отключил ресурспаки: " + ", ".join(item.split(" ", 1)[0] for item in names[:4]) + "."
+                if names else
+                " Ресурспаки уже проверил."
+            )
+        elif kind == "shader":
+            try:
+                extra = " " + disable_shader_pack(game_dir)
+            except Exception:
+                extra = ""
+        elif kind == "java":
+            try:
+                _component, major = java_requirement(self.minecraft_dir(), self.version_combo.currentText().strip())
+            except Exception:
+                major = 0
+            if major:
+                extra = f" Нужна Java {major}. Скачай её во вкладке «Установка»."
+        elif kind == "ram":
+            want = suggested_ram_gb(max(count_mods(game_dir), 40))
+            self._ram_hold = True
+            self.ram_slider.setValue(max(int(self.ram_slider.value()), want))
+            self._ram_hold = False
+            self._config["ram_auto"] = True
+            extra = f" Поднял память до {self.ram_slider.value()} ГБ. Нажми «Играть» ещё раз."
+        message, _disabled = startup_failure(game_dir, self._log_path)
+        text = (message + extra).strip()
+        self._set_status(text[:240])
+        QMessageBox.warning(self, APP_NAME, text)
 
     def _missing_library(self) -> None:
         QMessageBox.critical(

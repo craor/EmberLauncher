@@ -23,7 +23,7 @@ jobs:
       - name: Install
         run: pip install -r requirements.txt
       - name: Compile
-        run: python -m py_compile launcher.py build_release.py make_icon.py tests/test_core.py ember_src/part_01.py ember_src/part_01b.py ember_src/part_01c.py ember_src/part_02.py ember_src/part_02b.py ember_src/part_03.py ember_src/part_04.py ember_src/part_05.py
+        run: python -m py_compile launcher.py build_release.py make_icon.py tests/test_core.py ember_src/part_01.py ember_src/part_01b.py ember_src/part_01c.py ember_src/part_02.py ember_src/part_02b.py ember_src/part_02c.py ember_src/part_02d.py ember_src/part_03.py ember_src/part_04.py ember_src/part_05.py
       - name: Safety checks
         env:
           QT_QPA_PLATFORM: offscreen
@@ -96,4 +96,4 @@ jobs:
             "artifacts/EmberLauncher-macOS.dmg/EmberLauncher-macOS.dmg" \
             "artifacts/EmberLauncher-macOS.zip/EmberLauncher-macOS.zip" \
             --title "$TAG" \
-            --notes "macOS: HTTPS больше не падает без системных сертификатов. Панели лаунчера рисуются кожей и пергаментом. В релизе есть и DMG, и ZIP: старые версии качают только ZIP."
+            --notes "Библиотеки модов ищутся и на соседнем номере той же линии: GeckoLib для 1.21 берётся с 1.21.1. Мод без библиотеки отключается до запуска. Перед стартом проверяются Java, ресурспаки и natives. Если игра падает из-за пака, шейдера или памяти, лаунчер поправляет это сам. В установке есть проверка файлов и приоритет мощной видеокарты."

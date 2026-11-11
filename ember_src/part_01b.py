@@ -97,6 +97,28 @@ PRESETS = (
             "neoforge": ("cloth-config", "botania", "ars-nouveau"),
         },
     },
+    {
+        "id": "optimize",
+        "title": "Оптимизация",
+        "summary": "Только то, что поднимает кадры: рендер, тики и память. Шейдеров нет.",
+        "mods": {
+            "fabric": ("fabric-api", "sodium", "lithium", "ferrite-core", "entityculling", "immediatelyfast"),
+            "quilt": ("sodium", "lithium", "ferrite-core", "immediatelyfast"),
+            "forge": ("embeddium", "modernfix", "ferrite-core", "entityculling"),
+            "neoforge": ("embeddium", "modernfix", "ferrite-core", "entityculling"),
+        },
+    },
+    {
+        "id": "vanilla_plus",
+        "title": "Ванильное+",
+        "summary": "Почти ваниль: оптимизация, подсказка еды и миникарта. Без больших модов.",
+        "mods": {
+            "fabric": ("fabric-api", "sodium", "lithium", "ferrite-core", "appleskin", "xaeros-minimap"),
+            "quilt": ("sodium", "lithium", "ferrite-core", "appleskin", "xaeros-minimap"),
+            "forge": ("embeddium", "ferrite-core", "appleskin", "xaeros-minimap"),
+            "neoforge": ("embeddium", "ferrite-core", "appleskin", "xaeros-minimap"),
+        },
+    },
 )
 
 CURATED = (
