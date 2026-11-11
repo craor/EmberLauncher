@@ -136,11 +136,20 @@ class LauncherWindow(GradientWindow):
         for button in self._nav:
             side_layout.addWidget(button)
         side_layout.addStretch(1)
-        self.download_stat = QLabel("Скачали лаунчер: …\nОнлайн не считается — нет своего сервера.")
+        self.download_stat = QLabel("Скачали лаунчер: …\nОнлайн: укажи адрес сервера")
         self.download_stat.setObjectName("muted")
         self.download_stat.setWordWrap(True)
-        self.download_stat.setToolTip("Сколько раз скачали файлы лаунчера с GitHub. Сколько окон открыто сейчас, без своего сервера не посчитать.")
+        self.download_stat.setToolTip(
+            "Верхняя строка — сколько раз скачали лаунчер с GitHub. "
+            "Нижняя — игроки на твоём сервере Minecraft. Отдельный сайт для счётчика не нужен."
+        )
         side_layout.addWidget(self.download_stat)
+        self.status_host = QLineEdit(str(self._config.get("status_host") or self._server.get("host") or ""))
+        self.status_host.setPlaceholderText("IP сервера, например play.example.com")
+        self.status_host.editingFinished.connect(self._ping_server)
+        side_layout.addWidget(self.status_host)
+        self._download_count: int | None = None
+        self._online_line = "Онлайн: укажи адрес сервера"
         side_layout.addWidget(self._section("НИК"))
         self.nick_edit = QComboBox()
         self.nick_edit.setEditable(True)
@@ -588,6 +597,7 @@ class LauncherWindow(GradientWindow):
             self._fade.start()
             QTimer.singleShot(450, lambda: self.setWindowOpacity(1.0))
             QTimer.singleShot(1600, lambda: self.check_for_update(False))
+            QTimer.singleShot(900, self._ping_server)
         if self._news_worker is None:
             self._load_news()
 
@@ -623,10 +633,50 @@ class LauncherWindow(GradientWindow):
         self._fit_news()
 
     def _on_downloads(self, count: int) -> None:
-        if count < 0:
-            self.download_stat.setText("Скачали лаунчер: нет сети\nОнлайн не считается — нет своего сервера.")
+        self._download_count = count
+        self._render_stat()
+
+    def _render_stat(self) -> None:
+        count = getattr(self, "_download_count", None)
+        if count is None:
+            first = "Скачали лаунчер: …"
+        elif count < 0:
+            first = "Скачали лаунчер: нет сети"
+        else:
+            first = f"Скачали лаунчер: {count}"
+        online = getattr(self, "_online_line", "Онлайн: укажи адрес сервера")
+        self.download_stat.setText(f"{first}\n{online}")
+
+    def _ping_server(self) -> None:
+        host = ""
+        field = getattr(self, "status_host", None)
+        if field is not None:
+            host = field.text().strip()
+        if not host:
+            host = str(self._server.get("host") or "")
+        if not split_server_address(host)[0]:
+            self._online_line = "Онлайн: укажи адрес сервера"
+            self._render_stat()
+            self.persist()
             return
-        self.download_stat.setText(f"Скачали лаунчер: {count}\nОнлайн не считается — нет своего сервера.")
+        worker = getattr(self, "_status_worker", None)
+        if worker is not None and worker.isRunning():
+            return
+        self._online_line = "Онлайн: спрашиваю сервер…"
+        self._render_stat()
+        worker = ServerStatusWorker(host)
+        self._status_worker = worker
+        worker.ready.connect(self._on_server_status)
+        worker.start()
+        self.persist()
+
+    def _on_server_status(self, info: object) -> None:
+        data = info if isinstance(info, dict) else {}
+        if data.get("ok"):
+            self._online_line = f"Онлайн: {int(data.get('online') or 0)} из {int(data.get('max') or 0)}"
+        else:
+            self._online_line = "Сервер не отвечает"
+        self._render_stat()
 
     def _on_news_failed(self, _message: str) -> None:
         self.news_box.setText(self._fallback_news())
@@ -879,6 +929,7 @@ class LauncherWindow(GradientWindow):
             "ram_auto": self._config.get("ram_auto") is not False,
             "linux_compat": str(self.linux_compat.currentData() or "auto"),
             "mac_thread": str(self.mac_thread.currentData() or "auto"),
+            "status_host": self.status_host.text().strip() if getattr(self, "status_host", None) is not None else "",
         }
 
     def persist(self) -> None:

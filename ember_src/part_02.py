@@ -71,6 +71,126 @@ def load_server() -> dict:
     return empty
 
 
+def split_server_address(value: str) -> tuple[str, int]:
+    """Адрес вида host или host:порт. Пустой и кривой адрес никуда не подключаются."""
+    text = str(value or "").strip()
+    for prefix in ("https://", "http://"):
+        if text.lower().startswith(prefix):
+            text = text[len(prefix):]
+    text = text.split("/")[0].strip()
+    if not text:
+        return "", 25565
+    host, port = text, 25565
+    if text.count(":") == 1:
+        left, right = text.rsplit(":", 1)
+        if right.isdigit():
+            host, port = left, int(right)
+    host = host.strip().strip("[]")
+    if not re.fullmatch(r"[A-Za-z0-9.-]{1,80}", host) or not 1 <= port <= 65535:
+        return "", 25565
+    return host, port
+
+
+def _mc_varint(value: int) -> bytes:
+    number = int(value) & 0xFFFFFFFF
+    out = bytearray()
+    while True:
+        byte = number & 0x7F
+        number >>= 7
+        if number:
+            byte |= 0x80
+        out.append(byte)
+        if not number:
+            break
+    return bytes(out)
+
+
+def status_request_packet(host: str, port: int) -> bytes:
+    """Рукопожатие статуса Minecraft и пустой запрос. Без этого сервер молчит."""
+    import struct
+
+    encoded = host.encode("utf-8")
+    body = b"\x00" + _mc_varint(47) + _mc_varint(len(encoded)) + encoded + struct.pack(">H", int(port)) + b"\x01"
+    return _mc_varint(len(body)) + body + b"\x01\x00"
+
+
+def _take_varint(data: bytes, index: int) -> tuple[int, int]:
+    number = 0
+    shift = 0
+    for step in range(5):
+        if index + step >= len(data):
+            raise ValueError("обрыв")
+        byte = data[index + step]
+        number |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return number, index + step + 1
+        shift += 7
+    raise ValueError("varint")
+
+
+def query_server_status(address: str, timeout: float = 4.0) -> dict:
+    """Сколько игроков на сервере. Обычный запрос списка, отдельный хостинг не нужен."""
+    host, port = split_server_address(address)
+    empty = {"ok": False, "online": 0, "max": 0}
+    if not host:
+        return empty
+    import socket
+
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+    except OSError:
+        return empty
+    try:
+        sock.settimeout(timeout)
+        sock.sendall(status_request_packet(host, port))
+
+        def read_varint() -> int:
+            number = 0
+            shift = 0
+            for _step in range(5):
+                raw = sock.recv(1)
+                if not raw:
+                    raise OSError("пустой ответ")
+                byte = raw[0]
+                number |= (byte & 0x7F) << shift
+                if not byte & 0x80:
+                    return number
+                shift += 7
+            raise OSError("длинный ответ")
+
+        length = read_varint()
+        if length <= 0 or length > 1_000_000:
+            return empty
+        blob = b""
+        while len(blob) < length:
+            chunk = sock.recv(length - len(blob))
+            if not chunk:
+                break
+            blob += chunk
+    except OSError:
+        return empty
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+    try:
+        _packet_id, cursor = _take_varint(blob, 0)
+        size, cursor = _take_varint(blob, cursor)
+        payload = json.loads(blob[cursor:cursor + size].decode("utf-8", errors="replace"))
+    except (ValueError, json.JSONDecodeError, UnicodeError):
+        return empty
+    players = payload.get("players") if isinstance(payload, dict) else None
+    if not isinstance(players, dict):
+        return empty
+    try:
+        online = max(0, int(players.get("online") or 0))
+        maximum = max(0, int(players.get("max") or 0))
+    except (TypeError, ValueError):
+        return empty
+    return {"ok": True, "online": online, "max": maximum}
+
+
 def load_config() -> dict:
     defaults = {
         "nickname": "Player",
@@ -92,6 +212,7 @@ def load_config() -> dict:
         "ram_auto": True,
         "linux_compat": "auto",
         "mac_thread": "auto",
+        "status_host": "",
     }
     try:
         with open(config_path(), "r", encoding="utf-8") as handle:
@@ -130,6 +251,10 @@ def load_config() -> dict:
     defaults["linux_compat"] = linux_mode if linux_mode in {"auto", "wayland", "x11", "nvidia", "mesa", "openal"} else "auto"
     mac_mode = str(defaults.get("mac_thread") or "auto")
     defaults["mac_thread"] = mac_mode if mac_mode in {"auto", "always", "never"} else "auto"
+    status_host, _status_port = split_server_address(str(defaults.get("status_host") or ""))
+    defaults["status_host"] = status_host if not _status_port or _status_port == 25565 else f"{status_host}:{_status_port}"
+    if not status_host:
+        defaults["status_host"] = ""
     accounts: list[str] = []
     raw_accounts = stored.get("accounts")
     if isinstance(raw_accounts, list):

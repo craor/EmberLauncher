@@ -232,6 +232,15 @@ def main() -> None:
         encoding="utf-8",
     )
     assert launcher.crash_fix_kind(str(crash_dir), "") == "ram"
+    ui_paint = (ROOT / "ember_src" / "part_03.py").read_text(encoding="utf-8")
+    assert "drawPixmap(QRectF" not in ui_paint
+    assert "drawPixmap(x, y, pix)" in ui_paint
+    assert launcher.split_server_address("play.example.com:25566") == ("play.example.com", 25566)
+    assert launcher.split_server_address("https://play.example.com/path") == ("play.example.com", 25565)
+    assert launcher.split_server_address("javascript:alert(1)") == ("", 25565)
+    packet = launcher.status_request_packet("play.example.com", 25565)
+    assert b"play.example.com" in packet and packet.endswith(b"\x01\x00")
+    assert launcher.query_server_status("")["ok"] is False
     print("ok")
 
 

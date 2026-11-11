@@ -309,6 +309,17 @@ class NewsWorker(QThread):
             self.downloads.emit(-1)
 
 
+class ServerStatusWorker(QThread):
+    ready = pyqtSignal(object)
+
+    def __init__(self, address: str) -> None:
+        super().__init__()
+        self.address = address
+
+    def run(self) -> None:
+        self.ready.emit(query_server_status(self.address))
+
+
 class UpdateCheckWorker(QThread):
     ready = pyqtSignal(object)
     failed = pyqtSignal(str)
@@ -681,24 +692,34 @@ def texture_stylesheet() -> str:
 
 
 def paint_tiled(painter: QPainter, rect, name: str) -> bool:
+    """Кладёт текстуру клетками. Координаты целые: QRectF этот Qt на Windows не принимает."""
     pix = texture_pixmap(name)
-    if pix.isNull() or pix.width() < 2 or rect.width() < 2 or rect.height() < 2:
+    try:
+        if pix.isNull() or pix.width() < 2 or rect.width() < 2 or rect.height() < 2:
+            return False
+        left = int(rect.left())
+        top = int(rect.top())
+        right = int(rect.right())
+        bottom = int(rect.bottom())
+    except Exception:
         return False
     painter.save()
-    painter.setClipRect(rect)
-    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
-    ratio = float(pix.devicePixelRatio() or 1)
-    width = max(1, int(round(pix.width() / ratio)))
-    height = max(1, int(round(pix.height() / ratio)))
-    y = rect.top()
-    bottom = rect.bottom()
-    right = rect.right()
-    while y <= bottom:
-        x = rect.left()
-        while x <= right:
-            painter.drawPixmap(QRectF(int(x), int(y), width, height), pix)
-            x += width
-        y += height
+    try:
+        painter.setClipRect(rect)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+        ratio = float(pix.devicePixelRatio() or 1)
+        width = max(1, int(round(pix.width() / ratio)))
+        height = max(1, int(round(pix.height() / ratio)))
+        y = top
+        while y <= bottom:
+            x = left
+            while x <= right:
+                painter.drawPixmap(x, y, pix)
+                x += width
+            y += height
+    except Exception:
+        painter.restore()
+        return False
     painter.restore()
     return True
 

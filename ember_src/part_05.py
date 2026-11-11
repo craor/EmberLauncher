@@ -1,10 +1,20 @@
 
 
 def _install_excepthook() -> None:
+    shown = {"done": False}
+
     def hook(exc_type, exc_value, exc_tb) -> None:
         text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        where = "".join(traceback.format_tb(exc_tb))
+        if any(mark in where for mark in ("paintEvent", "paint_tiled", "paint_material")):
+            sys.stderr.write(text)
+            return
+        if shown["done"]:
+            sys.stderr.write(text)
+            return
+        shown["done"] = True
         try:
-            QMessageBox.critical(None, APP_NAME, text)
+            QMessageBox.critical(None, APP_NAME, text[-1600:])
         except Exception:
             sys.stderr.write(text)
         sys.__excepthook__(exc_type, exc_value, exc_tb)
