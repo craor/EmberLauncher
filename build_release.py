@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -37,18 +38,48 @@ def _sign_mac_app(app: Path) -> None:
     subprocess.check_call(["codesign", "--verify", "--deep", "--strict", str(app)], cwd=ROOT)
 
 
+def _create_dmg(staging: Path, archive: Path) -> None:
+    """hdiutil на раннере иногда отвечает Resource busy сразу после codesign."""
+    last_error: subprocess.CalledProcessError | None = None
+    for attempt in range(4):
+        subprocess.run(["hdiutil", "detach", "/Volumes/Ember"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if archive.exists():
+            archive.unlink()
+        try:
+            subprocess.check_call(
+                [
+                    "hdiutil",
+                    "create",
+                    "-volname",
+                    "Ember",
+                    "-srcfolder",
+                    str(staging),
+                    "-ov",
+                    "-format",
+                    "UDZO",
+                    str(archive),
+                ],
+                cwd=ROOT,
+            )
+            return
+        except subprocess.CalledProcessError as exc:
+            last_error = exc
+            time.sleep(3 + attempt * 2)
+    if last_error is not None:
+        raise last_error
+
+
 def _write_mac_dmg(app: Path, dist: Path) -> Path:
     staging = dist / "dmg-root"
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir()
     subprocess.check_call(["ditto", str(app), str(staging / "EmberLauncher.app")])
-    os.symlink("/Applications", staging / "Applications")
     (staging / "Как открыть.txt").write_text(
         "Ember для Mac с чипом Apple (M1 и новее). На Intel не запустится.\n"
         "\n"
         "1. Если в «Программах» уже есть старый EmberLauncher — замени его.\n"
-        "2. Перетащи EmberLauncher в папку «Программы» слева.\n"
+        "2. Перетащи EmberLauncher в «Программы».\n"
         "3. Открой «Программы», нажми EmberLauncher правой кнопкой и выбери «Открыть».\n"
         "4. Если система пишет про неизвестного разработчика — ещё раз «Открыть».\n"
         "5. Первый запуск спросит папку. Ярлык Ember появится на рабочем столе.\n"
@@ -58,25 +89,7 @@ def _write_mac_dmg(app: Path, dist: Path) -> Path:
         encoding="utf-8",
     )
     _sign_mac_app(staging / "EmberLauncher.app")
-    archive = dist / "EmberLauncher-macOS.dmg"
-    if archive.exists():
-        archive.unlink()
-    subprocess.check_call(
-        [
-            "hdiutil",
-            "create",
-            "-volname",
-            "Ember",
-            "-srcfolder",
-            str(staging),
-            "-ov",
-            "-format",
-            "UDZO",
-            str(archive),
-        ],
-        cwd=ROOT,
-    )
-    # Старый лаунчер на Mac ищет именно zip и проверяет заголовок PK.
+    # Сначала zip: его ищет лаунчер до 1.8.6. Потом dmg, он на раннере иногда занят.
     zipped = dist / "EmberLauncher-macOS.zip"
     if zipped.exists():
         zipped.unlink()
@@ -84,6 +97,8 @@ def _write_mac_dmg(app: Path, dist: Path) -> Path:
         ["ditto", "-c", "-k", "--keepParent", str(staging / "EmberLauncher.app"), str(zipped)],
         cwd=ROOT,
     )
+    archive = dist / "EmberLauncher-macOS.dmg"
+    _create_dmg(staging, archive)
     shutil.rmtree(staging)
     return archive
 
