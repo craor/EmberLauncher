@@ -76,6 +76,14 @@ def _write_mac_dmg(app: Path, dist: Path) -> Path:
         ],
         cwd=ROOT,
     )
+    # Старый лаунчер на Mac ищет именно zip и проверяет заголовок PK.
+    zipped = dist / "EmberLauncher-macOS.zip"
+    if zipped.exists():
+        zipped.unlink()
+    subprocess.check_call(
+        ["ditto", "-c", "-k", "--keepParent", str(staging / "EmberLauncher.app"), str(zipped)],
+        cwd=ROOT,
+    )
     shutil.rmtree(staging)
     return archive
 

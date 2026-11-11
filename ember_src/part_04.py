@@ -1304,6 +1304,8 @@ class LauncherWindow(GradientWindow):
                 self._set_status("Java не найдена. Нажми «Авто».")
                 return
             command[0] = replacement
+        command = prepare_mac_game_command(command)
+        unlock_downloaded_java(command[0] if command else "", directory, version)
         try:
             self._log_file = open(self._log_path, "a", encoding="utf-8", errors="replace")
             self._log_file.write(
@@ -1311,14 +1313,35 @@ class LauncherWindow(GradientWindow):
                 f"user={nickname} ram={self.ram_slider.value()}G server={server or '-'}\n"
             )
             self._log_file.flush()
-            popen_kwargs: dict = {"cwd": directory, "stdout": self._log_file, "stderr": subprocess.STDOUT}
+            popen_kwargs: dict = {
+                "cwd": directory,
+                "stdout": self._log_file,
+                "stderr": subprocess.STDOUT,
+                "stdin": subprocess.DEVNULL,
+                "env": game_process_env(),
+            }
             if os.name == "nt":
                 startup = subprocess.STARTUPINFO()
                 startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startup.wShowWindow = 0
                 popen_kwargs["startupinfo"] = startup
                 popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-            self._proc = subprocess.Popen(command, **popen_kwargs)
+                self._proc = subprocess.Popen(command, **popen_kwargs)
+            elif sys.platform == "darwin":
+                bundle = write_mac_game_bundle(command, directory, self._log_path)
+                self._log_file.write(f"mac-app={bundle}\n")
+                self._log_file.flush()
+                self._proc = subprocess.Popen(
+                    ["open", "-n", "-W", bundle],
+                    cwd=directory,
+                    stdout=self._log_file,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            else:
+                popen_kwargs["start_new_session"] = True
+                self._proc = subprocess.Popen(command, **popen_kwargs)
         except OSError as exc:
             QMessageBox.critical(self, APP_NAME, str(exc))
             return
@@ -1334,11 +1357,21 @@ class LauncherWindow(GradientWindow):
     def _check_process(self) -> None:
         if self._proc is None:
             return
-        if self._proc.poll() is None:
+        code = self._proc.poll()
+        if code is None:
             self._crash_checks = getattr(self, "_crash_checks", 0) + 1
-            if self._crash_checks < 10:
+            if self._crash_checks < 12:
                 QTimer.singleShot(1500, self._check_process)
             return
+        if mac_minecraft_alive():
+            self._proc = None
+            return
+        try:
+            if self._log_file and not self._log_file.closed:
+                self._log_file.write(f"\n[ember] process exit {code}\n")
+                self._log_file.flush()
+        except OSError:
+            pass
         message, _disabled = startup_failure(self.minecraft_dir(), self._log_path)
         self._set_status(message[:240])
         QMessageBox.warning(self, APP_NAME, message)

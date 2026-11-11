@@ -110,6 +110,37 @@ def main() -> None:
     assert launcher.update_payload_ok(b"xxxx", b"koly", "darwin")
     assert not launcher.update_payload_ok(b"PK\x03\x04", b"", "darwin")
     assert launcher.update_payload_ok(b"\x7fELF", b"", "linux")
+    mac = launcher.mac_launch_command(["/usr/bin/java", "-Xmx2G", "net.minecraft.client.main.Main"], "darwin")
+    assert mac[1] == "-XstartOnFirstThread"
+    assert any(item.startswith("-Dfml.earlyprogresswindow=") for item in mac)
+    assert launcher.mac_launch_command(mac, "darwin").count("-XstartOnFirstThread") == 1
+    assert launcher.mac_launch_command(["java", "-version"], "linux") == ["java", "-version"]
+    mixed = ":".join((
+        "/libs/lwjgl-glfw-3.3.3.jar",
+        "/libs/lwjgl-glfw-3.3.3-natives-macos.jar",
+        "/libs/lwjgl-glfw-3.3.3-natives-macos-arm64.jar",
+    ))
+    arm_cp = launcher.filter_mac_classpath(mixed, "arm64")
+    assert any(part.endswith("natives-macos-arm64.jar") for part in arm_cp.split(":"))
+    assert not any(part.endswith("natives-macos.jar") for part in arm_cp.split(":"))
+    intel_cp = launcher.filter_mac_classpath(mixed, "x86_64")
+    assert "natives-macos-arm64" not in intel_cp
+    assert any(part.endswith("natives-macos.jar") for part in intel_cp.split(":"))
+    prepared = launcher.prepare_mac_game_command(
+        ["/usr/bin/java", "-cp", mixed, "net.minecraft.client.main.Main"],
+        "darwin",
+        "arm64",
+    )
+    assert prepared[1] == "-XstartOnFirstThread"
+    prepared_cp = prepared[prepared.index("-cp") + 1]
+    assert not any(part.endswith("natives-macos.jar") for part in prepared_cp.split(":"))
+    assert any(part.endswith("natives-macos-arm64.jar") for part in prepared_cp.split(":"))
+    assert launcher.prepare_mac_game_command(["java", "-version"], "linux") == ["java", "-version"]
+    import struct
+    import tempfile
+    binary = pathlib.Path(tempfile.mkdtemp()) / "liblwjgl.dylib"
+    binary.write_bytes(struct.pack("<II", 0xFEEDFACF, 0x0100000C) + b"\0" * 32)
+    assert launcher.macho_cpus(str(binary)) == {"arm64"}
     print("ok")
 
 

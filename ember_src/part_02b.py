@@ -6,6 +6,26 @@ def release_filename() -> str:
     return "EmberLauncher-linux"
 
 
+def mac_update_destination(executable: str) -> str:
+    """Куда класть новую сборку. Копия из DMG и App Translocation — не настоящая программа."""
+    bundle = mac_app_bundle(executable)
+    marker = bundle.replace("\\", "/")
+    transient = (
+        "AppTranslocation" in marker
+        or "/Volumes/" in marker
+        or marker.startswith("/private/var/folders/")
+    )
+    if not transient:
+        return bundle
+    system_apps = "/Applications/EmberLauncher.app"
+    home_apps = os.path.join(os.path.expanduser("~"), "Applications", "EmberLauncher.app")
+    for candidate in (system_apps, home_apps):
+        if os.path.isdir(candidate):
+            return candidate
+    os.makedirs(os.path.dirname(home_apps), exist_ok=True)
+    return home_apps
+
+
 def update_payload_ok(header: bytes, trailer: bytes, platform: str = "") -> bool:
     kind = platform or sys.platform
     if kind in ("win32", "nt", "windows"):
@@ -70,18 +90,28 @@ def schedule_self_replace(downloaded: str) -> None:
         subprocess.Popen(["cmd", "/c", script_path], creationflags=flags, close_fds=True)
         return
     if sys.platform == "darwin":
-        bundle = mac_app_bundle(sys.executable)
-        bundle = assert_safe_path(bundle)
+        bundle = assert_safe_path(mac_update_destination(sys.executable))
+        parent = assert_safe_path(os.path.dirname(bundle))
         script_path = os.path.join(tempfile.gettempdir(), "ember-update.sh")
+        # Старые версии качали zip и распаковывали ditto. Новые — dmg.
         script = (
             "#!/bin/sh\n"
             "sleep 2\n"
-            "mount=$(mktemp -d)\n"
-            f'hdiutil attach -nobrowse -readonly -mountpoint "$mount" "{new_file}" || exit 1\n'
-            f'rm -rf "{bundle}"\n'
-            f'ditto "$mount/EmberLauncher.app" "{bundle}"\n'
-            'hdiutil detach "$mount" || true\n'
-            'rmdir "$mount" 2>/dev/null || true\n'
+            f'header=$(dd if="{new_file}" bs=4 count=1 2>/dev/null)\n'
+            'case "$header" in\n'
+            "PK*)\n"
+            f'  rm -rf "{bundle}"\n'
+            f'  ditto -x -k "{new_file}" "{parent}" || exit 1\n'
+            "  ;;\n"
+            "*)\n"
+            '  mount=$(mktemp -d)\n'
+            f'  hdiutil attach -nobrowse -readonly -mountpoint "$mount" "{new_file}" || exit 1\n'
+            f'  rm -rf "{bundle}"\n'
+            f'  ditto "$mount/EmberLauncher.app" "{bundle}" || {{ hdiutil detach "$mount"; exit 1; }}\n'
+            '  hdiutil detach "$mount" || true\n'
+            '  rmdir "$mount" 2>/dev/null || true\n'
+            "  ;;\n"
+            "esac\n"
             f'xattr -dr com.apple.quarantine "{bundle}" 2>/dev/null || true\n'
             f'open "{bundle}"\n'
             'rm -f "$0"\n'

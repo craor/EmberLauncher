@@ -121,7 +121,12 @@ class EmberButton(QWidget):
         depth = 4
         painter.fillRect(rect.adjusted(0, depth, 0, 0), edge)
         face_rect = rect.adjusted(0, shift, 0, -(depth - shift))
-        painter.fillRect(face_rect, face)
+        if not paint_tiled(painter, face_rect, "wood" if self._primary else "wood-dark"):
+            painter.fillRect(face_rect, face)
+        else:
+            tint = QColor(face)
+            tint.setAlpha(40 if self._primary else 50)
+            painter.fillRect(face_rect, tint)
         nail = QColor("#1A120C")
         painter.fillRect(face_rect.left() + 4, face_rect.top() + 4, 3, 3, nail)
         painter.fillRect(face_rect.right() - 7, face_rect.top() + 4, 3, 3, nail)
@@ -148,7 +153,13 @@ class EmberButton(QWidget):
             face = QColor("#2B1F17")
             ink = QColor("#6B5A48")
         painter.fillRect(rect, QColor("#1A120C"))
-        painter.fillRect(rect.adjusted(0, 0, 0, -3), face)
+        board = rect.adjusted(0, 0, 0, -3)
+        if not paint_tiled(painter, board, "wood" if self._selected else "wood-dark"):
+            painter.fillRect(board, face)
+        else:
+            tint = QColor(face)
+            tint.setAlpha(56 if self._selected else 36)
+            painter.fillRect(board, tint)
         rivet = QColor("#2B1F17") if self._selected else QColor("#E8873A")
         painter.fillRect(rect.left() + 10, rect.center().y() - 4, 8, 8, rivet)
         painter.setPen(ink)
@@ -317,7 +328,7 @@ class UpdateDownloadWorker(QThread):
         self.digest = digest
 
     def run(self) -> None:
-        dest = os.path.join(tempfile.gettempdir(), "EmberLauncher-update.exe")
+        dest = os.path.join(tempfile.gettempdir(), "ember-update-" + release_filename())
         try:
             http_download(self.url, dest, timeout=300)
             verify_update_file(dest, self.digest)
@@ -544,6 +555,154 @@ class DownloadDialog(QDialog):
         super().closeEvent(event)
 
 
+_TEXTURES: dict[str, QPixmap] = {}
+
+
+def texture_bytes(name: str) -> bytes:
+    path = _bundle_root() / "ember_src" / "textures" / f"{name}.b64"
+    try:
+        return base64.b64decode("".join(path.read_text(encoding="ascii").split()))
+    except (OSError, ValueError):
+        return b""
+
+
+def texture_pixmap(name: str) -> QPixmap:
+    cached = _TEXTURES.get(name)
+    if cached is not None:
+        return cached
+    pix = QPixmap()
+    raw = texture_bytes(name)
+    if raw:
+        pix.loadFromData(raw, "PNG")
+    _TEXTURES[name] = pix
+    return pix
+
+
+def materialize_texture(name: str) -> str:
+    raw = texture_bytes(name)
+    if not raw:
+        return ""
+    folder = pathlib.Path(tempfile.gettempdir()) / "ember-ui"
+    try:
+        folder.mkdir(exist_ok=True)
+        dest = folder / f"{name}.png"
+        if not dest.is_file() or dest.stat().st_size < 1000:
+            dest.write_bytes(raw)
+        return dest.resolve().as_posix()
+    except OSError:
+        return ""
+
+
+def texture_stylesheet() -> str:
+    wood = materialize_texture("wood-dark")
+    parchment = materialize_texture("parchment")
+    leather = materialize_texture("leather")
+    rules: list[str] = []
+    if wood:
+        rules.append(
+            "QFrame#sideBar, QFrame#centerCard, QFrame#sidePanel, QFrame#footerBar, "
+            "QFrame#hubCard, QFrame#card, QDialog#downloadDialog {"
+            " background-color: #2B1F17;"
+            f' background-image: url("{wood}"); background-repeat: repeat; background-position: top left; }}'
+        )
+    if parchment:
+        rules.append(
+            "QLineEdit, QComboBox, QListWidget, QComboBox QAbstractItemView, QTextEdit, QPlainTextEdit {"
+            " background-color: #E7D7B1;"
+            f' background-image: url("{parchment}"); background-repeat: repeat; }}'
+        )
+    if leather:
+        rules.append(
+            "QLabel#chip {"
+            f' background-image: url("{leather}"); background-repeat: repeat; }}'
+        )
+    return "\n".join(rules)
+
+
+def paint_tiled(painter: QPainter, rect, name: str) -> bool:
+    pix = texture_pixmap(name)
+    if pix.isNull() or pix.width() < 2 or rect.width() < 2 or rect.height() < 2:
+        return False
+    painter.save()
+    painter.setClipRect(rect)
+    width = pix.width()
+    height = pix.height()
+    y = rect.top()
+    bottom = rect.bottom()
+    right = rect.right()
+    while y <= bottom:
+        x = rect.left()
+        while x <= right:
+            painter.drawPixmap(int(x), int(y), pix)
+            x += width
+        y += height
+    painter.restore()
+    return True
+
+
+def style_mac_titlebar(widget) -> None:
+    """Верхняя полоса macOS — то же тёмное дерево, что и окно, а не белая системная."""
+    if sys.platform != "darwin":
+        return
+    try:
+        import ctypes
+        from ctypes import c_byte, c_char_p, c_double, c_long, c_ulong, c_void_p
+
+        objc = ctypes.cdll.LoadLibrary("/usr/lib/libobjc.A.dylib")
+        objc.objc_getClass.restype = c_void_p
+        objc.objc_getClass.argtypes = [c_char_p]
+        objc.sel_registerName.restype = c_void_p
+        objc.sel_registerName.argtypes = [c_char_p]
+
+        def msg(restype, *argtypes):
+            prototype = ctypes.CFUNCTYPE(restype, c_void_p, c_void_p, *argtypes)
+            return prototype(("objc_msgSend", objc))
+
+        def sel(name: str) -> int:
+            return objc.sel_registerName(name.encode("ascii"))
+
+        nsview = int(widget.winId())
+        window = msg(c_void_p)(nsview, sel("window"))
+        if not window:
+            return
+        own = isinstance(widget, GradientWindow) or str(widget.objectName() or "") == "downloadDialog"
+        if own:
+            mask = msg(c_ulong)(window, sel("styleMask"))
+            msg(None, c_ulong)(window, sel("setStyleMask:"), mask | (1 << 15))
+            if not widget.property("_ember_mac_inset"):
+                layout = widget.layout()
+                if layout is not None:
+                    margins = layout.contentsMargins()
+                    layout.setContentsMargins(margins.left(), max(margins.top(), 34), margins.right(), margins.bottom())
+                widget.setProperty("_ember_mac_inset", True)
+        msg(None, c_byte)(window, sel("setTitlebarAppearsTransparent:"), 1)
+        msg(None, c_long)(window, sel("setTitleVisibility:"), 1)
+        color = msg(c_void_p, c_double, c_double, c_double, c_double)(
+            objc.objc_getClass(b"NSColor"),
+            sel("colorWithCalibratedRed:green:blue:alpha:"),
+            43 / 255,
+            31 / 255,
+            23 / 255,
+            1.0,
+        )
+        if color:
+            msg(None, c_void_p)(window, sel("setBackgroundColor:"), color)
+        appearance_name = msg(c_void_p, c_char_p)(
+            objc.objc_getClass(b"NSString"),
+            sel("stringWithUTF8String:"),
+            b"NSAppearanceNameDarkAqua",
+        )
+        appearance = msg(c_void_p, c_void_p)(
+            objc.objc_getClass(b"NSAppearance"),
+            sel("appearanceNamed:"),
+            appearance_name,
+        )
+        if appearance:
+            msg(None, c_void_p)(window, sel("setAppearance:"), appearance)
+    except Exception:
+        return
+
+
 class GradientWindow(QWidget):
     def __init__(self) -> None:
         super().__init__()
@@ -580,53 +739,35 @@ class GradientWindow(QWidget):
             self._mouse = (local.x() / self.width(), local.y() / self.height())
         self.update()
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        style_mac_titlebar(self)
+        QTimer.singleShot(0, lambda: style_mac_titlebar(self))
+        QTimer.singleShot(180, lambda: style_mac_titlebar(self))
+
     def paintEvent(self, event) -> None:
         del event
         painter = QPainter(self)
         width = self.width()
         height = self.height()
-        painter.fillRect(self.rect(), QColor("#2B1F17"))
-        sky = QLinearGradient(0, 0, 0, height * 0.62)
-        sky.setColorAt(0.0, QColor("#6E5344"))
-        sky.setColorAt(1.0, QColor("#2B1F17"))
-        painter.fillRect(0, 0, width, int(height * 0.62), sky)
-        mx = (self._mouse[0] - 0.5) if hasattr(self, "_mouse") else 0.0
-        my = (self._mouse[1] - 0.5) if hasattr(self, "_mouse") else 0.0
+        if not paint_tiled(painter, self.rect(), "wood-dark"):
+            painter.fillRect(self.rect(), QColor("#2B1F17"))
+        vignette = QLinearGradient(0, 0, 0, height)
+        vignette.setColorAt(0.0, QColor(18, 12, 8, 90))
+        vignette.setColorAt(0.45, QColor(18, 12, 8, 20))
+        vignette.setColorAt(1.0, QColor(8, 5, 3, 120))
+        painter.fillRect(self.rect(), vignette)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         painter.setPen(Qt.PenStyle.NoPen)
-        drift = int(self._t * 6) % 48
-        for index, cloud in enumerate(((40, 36, 28), (180, 58, 18), (320, 28, 22), (520, 70, 16))):
-            cx = int((cloud[0] + drift + mx * 10 + index * 90) % (width + 80)) - 40
-            cy = int(cloud[1] + my * 6)
-            painter.fillRect(cx, cy, cloud[2], 6, QColor("#D9C7A0"))
-            painter.fillRect(cx + 4, cy - 4, cloud[2] - 8, 4, QColor("#E7D7B1"))
-        base_y = int(height * 0.46 + my * 10)
-        painter.fillRect(int(mx * 8), base_y, width, height, QColor("#24301C"))
-        peaks = (0, 36, 18, 52, 8, 40, 22, 48, 12, 34)
-        for index, peak in enumerate(peaks):
-            left = int(index * (width / 8) - 20 + mx * 14)
-            painter.fillRect(left, base_y - peak * 3, 26, peak * 3, QColor("#3E5330"))
-            painter.fillRect(left + 8, base_y - peak * 3 - 10, 10, 10, QColor("#6B8F47"))
-        ground = int(height * 0.72)
-        painter.fillRect(0, ground, width, height - ground, QColor("#3A291C"))
-        for x in range(0, width, 18):
-            painter.fillRect(x, ground, 8, 4, QColor("#4A3426"))
-        flicker = 180 + int(50 * math.sin(self._t * 7))
-        torch_x = 28
-        torch_y = ground - 28
-        painter.fillRect(torch_x + 3, torch_y + 10, 4, 16, QColor("#4A3426"))
-        painter.fillRect(torch_x, torch_y, 10, 12, QColor(232, 135, 58, flicker))
-        painter.fillRect(torch_x + 3, torch_y - 4, 4, 4, QColor(255, 196, 90, flicker))
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        shade = QLinearGradient(0, 0, 0, 70)
-        shade.setColorAt(0.0, QColor(26, 18, 12, 170))
+        for ember in self._embers:
+            x = int(ember["x"] * width)
+            y = int(ember["y"] * height)
+            size = max(2, int(ember["s"]))
+            painter.fillRect(x, y, size, size, QColor(232, 140, 58, ember["a"]))
+        shade = QLinearGradient(0, 0, 0, 56)
+        shade.setColorAt(0.0, QColor(26, 18, 12, 70))
         shade.setColorAt(1.0, QColor(26, 18, 12, 0))
-        painter.fillRect(0, 0, width, 70, shade)
-        side = QLinearGradient(0, 0, 48, 0)
-        side.setColorAt(0.0, QColor(26, 18, 12, 150))
-        side.setColorAt(1.0, QColor(26, 18, 12, 0))
-        painter.fillRect(0, 0, 48, height, side)
-        painter.fillRect(width - 48, 0, 48, height, side)
+        painter.fillRect(0, 0, width, 56, shade)
         painter.end()
 
 
@@ -714,8 +855,13 @@ class ServerCard(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         rect = self.rect().adjusted(1, 1, -2, -2)
-        painter.fillRect(rect, QColor("#2B1F17"))
-        painter.fillRect(rect.adjusted(3, 3, -3, -3), QColor("#3A291C"))
+        if not paint_tiled(painter, rect, "wood"):
+            painter.fillRect(rect, QColor("#2B1F17"))
+        inner = rect.adjusted(3, 3, -3, -3)
+        if not paint_tiled(painter, inner, "wood-dark"):
+            painter.fillRect(inner, QColor("#3A291C"))
+        else:
+            painter.fillRect(inner, QColor(26, 18, 12, 36))
         painter.setPen(QPen(QColor("#1A120C"), 2))
         painter.drawRect(rect.adjusted(3, 3, -3, -3))
         painter.fillRect(rect.left() + 8, rect.top() + 8, 4, 4, QColor("#E8873A"))

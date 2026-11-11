@@ -455,6 +455,249 @@ def prefer_javaw(command: list[str]) -> list[str]:
     return command
 
 
+def mac_launch_command(command: list[str], platform_name: str = "") -> list[str]:
+    """На Mac окно Minecraft открывается только с главного потока. Иначе игра умирает до меню."""
+    if (platform_name or sys.platform) != "darwin" or not command:
+        return command
+    extras: list[str] = []
+    if "-XstartOnFirstThread" not in command:
+        extras.append("-XstartOnFirstThread")
+    if not any(arg.startswith("-Dfml.earlyprogresswindow=") for arg in command):
+        extras.append("-Dfml.earlyprogresswindow=false")
+    if not extras:
+        return command
+    return [command[0], *extras, *command[1:]]
+
+
+def macho_cpus(path: str) -> set[str]:
+    """Какие архитектуры в Mach-O: arm64, x86_64. Пусто, если это не бинарник."""
+    import struct
+
+    try:
+        with open(path, "rb") as handle:
+            blob = handle.read(512)
+    except OSError:
+        return set()
+    if len(blob) < 8:
+        return set()
+    names = {0x7: "x86_64", 0x01000007: "x86_64", 0xC: "arm64", 0x0100000C: "arm64"}
+    magic = blob[:4]
+    found: set[str] = set()
+    if magic == b"\xca\xfe\xba\xbe":
+        count = struct.unpack(">I", blob[4:8])[0]
+        offset = 8
+        for _ in range(min(count, 8)):
+            if offset + 4 > len(blob):
+                break
+            cpu = struct.unpack(">I", blob[offset:offset + 4])[0]
+            if cpu in names:
+                found.add(names[cpu])
+            offset += 20
+        return found
+    if magic == b"\xcf\xfa\xed\xfe":
+        cpu = struct.unpack("<I", blob[4:8])[0]
+        if cpu in names:
+            found.add(names[cpu])
+    return found
+
+
+def _java_mach_arch(java_path: str) -> str:
+    import platform
+
+    cpus = macho_cpus(java_path) if java_path and os.path.isfile(java_path) else set()
+    if cpus == {"arm64"}:
+        return "arm64"
+    if cpus == {"x86_64"}:
+        return "x86_64"
+    machine = (platform.machine() or "").lower()
+    return "arm64" if machine in {"arm64", "aarch64"} else "x86_64"
+
+
+def _mac_native_kind(name: str) -> str:
+    low = os.path.basename(name).lower()
+    if any(token in low for token in ("macos-arm64", "osx-arm64", "darwin-arm64")):
+        return "arm64"
+    if any(token in low for token in (
+        "natives-macos.jar",
+        "natives-macos-x64",
+        "natives-macos-x86",
+        "natives-osx.jar",
+        "natives-darwin.jar",
+    )):
+        return "x64"
+    return ""
+
+
+def filter_mac_classpath(classpath: str, java_arch: str) -> str:
+    """Оставляет natives только под архитектуру Java. Чужие роняют игру до меню."""
+    parts = [part for part in str(classpath or "").split(":") if part]
+    if java_arch not in {"arm64", "x86_64"}:
+        return ":".join(parts)
+    arm_present = any(_mac_native_kind(part) == "arm64" for part in parts)
+    kept: list[str] = []
+    for part in parts:
+        kind = _mac_native_kind(part)
+        if java_arch == "arm64" and kind == "x64" and arm_present:
+            continue
+        if java_arch == "x86_64" and kind == "arm64":
+            continue
+        kept.append(part)
+    return ":".join(kept)
+
+
+def prune_mac_natives(directory: str, java_arch: str) -> None:
+    """Убирает из папки natives dylib не той архитектуры, иначе lwjgl грузит её первой."""
+    if java_arch not in {"arm64", "x86_64"} or not directory or not os.path.isdir(directory):
+        return
+    for root, _dirs, files in os.walk(directory):
+        for name in files:
+            if not name.endswith((".dylib", ".jnilib")):
+                continue
+            path = os.path.join(root, name)
+            cpus = macho_cpus(path)
+            if not cpus or cpus == {"arm64", "x86_64"}:
+                continue
+            wrong = (java_arch == "arm64" and "arm64" not in cpus) or (
+                java_arch == "x86_64" and "x86_64" not in cpus
+            )
+            if not wrong:
+                continue
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
+def prepare_mac_game_command(command: list[str], platform_name: str = "", java_arch: str = "") -> list[str]:
+    plat = platform_name or sys.platform
+    if plat != "darwin" or not command:
+        return command
+    command = mac_launch_command(list(command), plat)
+    arch = java_arch or _java_mach_arch(command[0])
+    prepared: list[str] = []
+    index = 0
+    while index < len(command):
+        arg = command[index]
+        if arg in {"-cp", "-classpath"} and index + 1 < len(command):
+            prepared.append(arg)
+            prepared.append(filter_mac_classpath(command[index + 1], arch))
+            index += 2
+            continue
+        if arg.startswith("-Djava.library.path="):
+            prune_mac_natives(arg.split("=", 1)[1], arch)
+        prepared.append(arg)
+        index += 1
+    return prepared
+
+
+def mac_minecraft_alive() -> bool:
+    """open -W иногда возвращается сразу, хотя Java уже держит окно."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        found = subprocess.run(
+            ["pgrep", "-f", "net.minecraft.client.main"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return False
+    return found.returncode == 0
+
+
+def write_mac_game_bundle(command: list[str], cwd: str, log_file: str) -> str:
+    """Отдельное .app, а не дочерний процесс Qt: иначе Cocoa не даёт окно и игра умирает до меню."""
+    import shlex
+
+    folder = os.path.join(app_config_dir(), "MinecraftGame.app")
+    contents = os.path.join(folder, "Contents")
+    macos = os.path.join(contents, "MacOS")
+    os.makedirs(macos, exist_ok=True)
+    plist = """<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>launch</string>
+<key>CFBundleIdentifier</key><string>dev.emberlauncher.minecraft</string>
+<key>CFBundleName</key><string>Minecraft</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>LSMinimumSystemVersion</key><string>11.0</string>
+<key>NSHighResolutionCapable</key><true/>
+<key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+</dict></plist>
+"""
+    with open(os.path.join(contents, "Info.plist"), "w", encoding="utf-8") as handle:
+        handle.write(plist)
+    script = "\n".join((
+        "#!/bin/bash",
+        f"cd {shlex.quote(cwd)} || exit 1",
+        f"exec {shlex.join(command)} >> {shlex.quote(log_file)} 2>&1",
+        "",
+    ))
+    executable = os.path.join(macos, "launch")
+    with open(executable, "w", encoding="utf-8") as handle:
+        handle.write(script)
+    os.chmod(executable, 0o755)
+    for cmd in (
+        ["xattr", "-dr", "com.apple.quarantine", folder],
+        ["codesign", "--force", "--sign", "-", folder],
+    ):
+        try:
+            subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            pass
+    return folder
+
+
+def game_process_env() -> dict[str, str]:
+    env = os.environ.copy()
+    if sys.platform != "darwin":
+        return env
+    for key in list(env):
+        if key.startswith(("DYLD_", "QT_", "PYTHON", "SIP_")) or key in {
+            "PYTHONHOME", "PYTHONPATH", "PYTHONNOUSERSITE", "VERSIONER_PYTHON_PREFER_32_BIT",
+        }:
+            env.pop(key, None)
+    env["MallocNanoZone"] = "0"
+    env["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
+    return env
+
+
+def unlock_downloaded_java(java_path: str, minecraft_dir: str = "", version_id: str = "") -> None:
+    """Снимает карантин macOS с Java и библиотек, иначе процесс убивается до меню."""
+    if sys.platform != "darwin":
+        return
+    targets: list[str] = []
+    if java_path and java_path != "java" and os.path.exists(java_path):
+        real = os.path.realpath(java_path)
+        try:
+            os.chmod(real, os.stat(real).st_mode | 0o755)
+        except OSError:
+            pass
+        home = os.path.dirname(os.path.dirname(real))
+        if home:
+            targets.append(home)
+    if minecraft_dir:
+        for name in ("runtime", "libraries", "versions", "bin"):
+            folder = os.path.join(minecraft_dir, name)
+            if os.path.isdir(folder):
+                targets.append(folder)
+        natives = os.path.join(minecraft_dir, "versions", version_id, "natives")
+        if version_id and os.path.isdir(natives):
+            targets.append(natives)
+    seen: set[str] = set()
+    for target in targets:
+        if target in seen or not os.path.exists(target):
+            continue
+        seen.add(target)
+        subprocess.run(
+            ["xattr", "-dr", "com.apple.quarantine", target],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+
 def open_folder(path: str) -> None:
     os.makedirs(path, exist_ok=True)
     if os.name == "nt":
@@ -540,14 +783,6 @@ def active_update_repo(config: dict | None = None) -> str:
     if bundled:
         return bundled
     return DEFAULT_UPDATE_REPO
-
-
-def release_filename() -> str:
-    if os.name == "nt":
-        return "EmberLauncher.exe"
-    if sys.platform == "darwin":
-        return "EmberLauncher-macOS.zip"
-    return "EmberLauncher-linux"
 
 
 def github_update(repo: str, current: str) -> dict | None:
@@ -2034,14 +2269,21 @@ def _crash_blobs(directory: str, launcher_log: str) -> str:
 
 
 def _crash_reason(text: str) -> str:
+    low = text.lower()
+    if "unsupportedclassversionerror" in low or "more recent version of the java runtime" in low:
+        return (
+            "Java слишком старая для этой игры. Во вкладке «Установка» выбери Java 21, "
+            "для номеров 26.x — Java 25, и скачай её."
+        )
+    if any(mark in low for mark in ("glfw", "service port", "nsinternalinconsistency", "only be used on the main thread")):
+        return "macOS закрыла окно игры до меню. Нажми «Играть» ещё раз: теперь она стартует отдельным приложением, не из окна лаунчера."
+    if "incompatible architecture" in low or "have 'x86_64'" in low or 'have "x86_64"' in low or "not a mach-o" in low:
+        return "Библиотека была не под этот Mac. Нажми «Играть» ещё раз: лаунчер оставит natives только нужной архитектуры."
+    if "library load disallowed" in low or "code signature" in low or "killed: 9" in low or "process exit -9" in low or "process exit 137" in low:
+        return "macOS заблокировала Java или библиотеки. Нажми «Играть» ещё раз: карантин с них уже снимается."
     for line in text.splitlines():
-        low = line.lower()
-        if "unsupportedclassversionerror" in low or "more recent version of the java runtime" in low:
-            return (
-                "Java слишком старая для этой игры. Во вкладке «Установка» выбери Java 21, "
-                "для номеров 26.x — Java 25, и скачай её."
-            )
-        if "requires" in low and ("mod" in low or "мод" in low):
+        low_line = line.lower()
+        if "requires" in low_line and ("mod" in low_line or "мод" in low_line):
             return "Мод не нашёл библиотеку: " + line.strip()[-220:]
         stripped = line.strip()
         if stripped.lower().startswith("failure message:"):
@@ -2049,6 +2291,12 @@ def _crash_reason(text: str) -> str:
     caused = [line.strip() for line in text.splitlines() if line.strip().startswith("Caused by:")]
     if caused:
         return caused[-1][:240]
+    for line in reversed(text.splitlines()):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("at ") or stripped.startswith("---"):
+            continue
+        if any(mark in stripped.lower() for mark in ("error", "exception", "fatal", "dyld", "abort", "cannot")):
+            return "Игра упала при запуске, до меню не дошла. " + stripped[:180]
     return "Игра упала при запуске, до меню не дошла."
 
 

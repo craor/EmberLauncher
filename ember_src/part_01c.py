@@ -124,7 +124,10 @@ QFrame#hubCard {
     border: 2px solid #4A3426;
     border-radius: 2px;
 }
-QWidget#scrollBody, QScrollArea { background: transparent; border: none; }
+QWidget#scrollBody, QScrollArea, QStackedWidget, QAbstractScrollArea, QAbstractScrollArea::viewport {
+    background: transparent;
+    border: none;
+}
 QListWidget::item:selected { background: #E8873A; color: #2B1F17; }
 QListWidget::indicator {
     width: 14px; height: 14px; border-radius: 0px;

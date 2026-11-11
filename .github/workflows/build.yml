@@ -62,6 +62,12 @@ jobs:
           name: ${{ matrix.artifact }}
           path: dist/${{ matrix.artifact }}
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS'
+        with:
+          name: EmberLauncher-macOS.zip
+          path: dist/EmberLauncher-macOS.zip
+          if-no-files-found: error
 
   release:
     if: github.event_name != 'pull_request'
@@ -88,5 +94,6 @@ jobs:
             "artifacts/EmberLauncher.exe/EmberLauncher.exe" \
             "artifacts/EmberLauncher-linux/EmberLauncher-linux" \
             "artifacts/EmberLauncher-macOS.dmg/EmberLauncher-macOS.dmg" \
+            "artifacts/EmberLauncher-macOS.zip/EmberLauncher-macOS.zip" \
             --title "$TAG" \
-            --notes "Windows 10/11, Linux и macOS (DMG, чип Apple). Автор craor."
+            --notes "Windows 10/11, Linux и macOS. На Mac в релизе есть и DMG, и ZIP: старые версии лаунчера качают только ZIP."

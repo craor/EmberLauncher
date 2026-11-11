@@ -252,10 +252,22 @@ def main() -> None:
             pass
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    if sys.platform == "darwin":
+        from PyQt6.QtCore import QEvent, QObject
+
+        class _MacBar(QObject):
+            def eventFilter(self, obj, event) -> bool:
+                if event.type() == QEvent.Type.Show and isinstance(obj, QWidget) and obj.isWindow():
+                    if not obj.inherits("QFileDialog"):
+                        style_mac_titlebar(obj)
+                return False
+
+        app._mac_bar = _MacBar(app)
+        app.installEventFilter(app._mac_bar)
     app.setApplicationName(APP_NAME)
     app.setWindowIcon(load_app_icon())
     load_ui_fonts()
-    app.setStyleSheet(STYLESHEET)
+    app.setStyleSheet(STYLESHEET + "\n" + texture_stylesheet())
     app.setFont(QFont("Alegreya Sans", 11))
     palette = QPalette()
     palette.setColor(QPalette.ColorRole.Window, QColor("#2B1F17"))
