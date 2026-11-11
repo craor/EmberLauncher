@@ -96,4 +96,4 @@ jobs:
             "artifacts/EmberLauncher-macOS.dmg/EmberLauncher-macOS.dmg" \
             "artifacts/EmberLauncher-macOS.zip/EmberLauncher-macOS.zip" \
             --title "$TAG" \
-            --notes "Windows 10/11, Linux и macOS. На Mac в релизе есть и DMG, и ZIP: старые версии лаунчера качают только ZIP."
+            --notes "macOS: HTTPS больше не падает без системных сертификатов. Панели лаунчера рисуются кожей и пергаментом. В релизе есть и DMG, и ZIP: старые версии качают только ZIP."

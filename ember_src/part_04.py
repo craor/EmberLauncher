@@ -98,7 +98,7 @@ class LauncherWindow(GradientWindow):
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(12)
 
-        side = QFrame()
+        side = MaterialFrame("leather", 48)
         side.setObjectName("sideBar")
         side.setFixedWidth(214)
         side_layout = QVBoxLayout(side)
@@ -172,7 +172,7 @@ class LauncherWindow(GradientWindow):
             credit.setWordWrap(True)
             side_layout.addWidget(credit)
 
-        center = QFrame()
+        center = MaterialFrame("parchment", 0)
         center.setObjectName("centerCard")
         center_layout = QVBoxLayout(center)
         center_layout.setContentsMargins(18, 16, 18, 14)
@@ -355,7 +355,7 @@ class LauncherWindow(GradientWindow):
         center_layout.addWidget(self.progress)
         center_layout.addWidget(self.status)
 
-        footer = QFrame()
+        footer = MaterialFrame("leather", 24)
         footer.setObjectName("footerBar")
         footer_row = QHBoxLayout(footer)
         footer_row.setContentsMargins(10, 8, 8, 8)
@@ -377,7 +377,7 @@ class LauncherWindow(GradientWindow):
         footer_row.addWidget(self.play_btn)
         center_layout.addWidget(footer)
 
-        right = QFrame()
+        right = MaterialFrame("leather", 40)
         right.setObjectName("sidePanel")
         right.setFixedWidth(360)
         right_layout = QVBoxLayout(right)
@@ -489,8 +489,10 @@ class LauncherWindow(GradientWindow):
         self._show_page(0)
         self._sync_chips()
         self.refresh_versions()
+        reveal_materials(self)
 
     def showEvent(self, event) -> None:
+        reveal_materials(self)
         super().showEvent(event)
         enable_windows_dark_title(int(self.winId()))
         if not self._faded:

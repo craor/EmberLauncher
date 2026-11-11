@@ -57,6 +57,81 @@ def _arm_crash_log() -> None:
 
 _arm_crash_log()
 
+
+def _bundle_root() -> pathlib.Path:
+    if getattr(sys, "frozen", False):
+        return pathlib.Path(getattr(sys, "_MEIPASS"))
+    return pathlib.Path(__file__).resolve().parent
+
+
+def _install_ca_bundle() -> None:
+    """python.org и PyInstaller на Mac не знают системные сертификаты, и любой https падает."""
+    import ssl
+
+    def usable(path: str) -> bool:
+        try:
+            return bool(path) and os.path.isfile(path) and os.path.getsize(path) > 20_000
+        except OSError:
+            return False
+
+    candidates: list[str] = []
+    bundled = _bundle_root() / "cacert.pem"
+    if usable(str(bundled)):
+        candidates.append(str(bundled))
+    try:
+        import certifi
+
+        located = certifi.where()
+        if usable(located) and located not in candidates:
+            candidates.append(located)
+    except Exception:
+        pass
+    if sys.platform == "darwin":
+        exported = pathlib.Path(tempfile.gettempdir()) / "ember-ca" / "macos.pem"
+        try:
+            if not usable(str(exported)):
+                exported.parent.mkdir(exist_ok=True)
+                chunks: list[bytes] = []
+                for keychain in (
+                    "/System/Library/Keychains/SystemRootCertificates.keychain",
+                    "/Library/Keychains/System.keychain",
+                ):
+                    if not os.path.isfile(keychain):
+                        continue
+                    chunks.append(subprocess.check_output(
+                        ["/usr/bin/security", "find-certificate", "-a", "-p", keychain],
+                        timeout=30,
+                    ))
+                if chunks:
+                    exported.write_bytes(b"\n".join(chunks))
+        except Exception:
+            pass
+        if usable(str(exported)):
+            candidates.append(str(exported))
+    for cafile in candidates:
+        try:
+            ssl.create_default_context(cafile=cafile)
+        except Exception:
+            continue
+        os.environ["SSL_CERT_FILE"] = cafile
+        os.environ["REQUESTS_CA_BUNDLE"] = cafile
+        os.environ["CURL_CA_BUNDLE"] = cafile
+
+        def context(path: str = cafile) -> ssl.SSLContext:
+            return ssl.create_default_context(cafile=path)
+
+        ssl._create_default_https_context = context  # type: ignore[attr-defined]
+        try:
+            urllib.request.install_opener(
+                urllib.request.build_opener(urllib.request.HTTPSHandler(context=context()))
+            )
+        except Exception:
+            continue
+        return
+
+
+_install_ca_bundle()
+
 try:
     import minecraft_launcher_lib
     from minecraft_launcher_lib.exceptions import UnsupportedVersion, VersionNotFound
@@ -100,6 +175,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QApplication,
+    QAbstractScrollArea,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -115,6 +191,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QScrollArea,
+    QScrollBar,
     QSizePolicy,
     QSlider,
     QStackedWidget,
@@ -123,16 +200,10 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-APP_VERSION = "1.8.9"
-USER_AGENT = "EmberLauncher/1.8.9"
+APP_VERSION = "1.8.10"
+USER_AGENT = "EmberLauncher/1.8.10"
 AUTHOR = "craor"
 DEFAULT_UPDATE_REPO = "craor/EmberLauncher"
-
-
-def _bundle_root() -> pathlib.Path:
-    if getattr(sys, "frozen", False):
-        return pathlib.Path(getattr(sys, "_MEIPASS"))
-    return pathlib.Path(__file__).resolve().parent
 
 
 def _load_program() -> None:

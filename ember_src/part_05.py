@@ -199,6 +199,7 @@ class InstallerWindow(GradientWindow):
         layout.addWidget(self.status)
         layout.addStretch(1)
         layout.addWidget(self.install_btn)
+        reveal_materials(self)
 
     def _browse(self) -> None:
         chosen = QFileDialog.getExistingDirectory(self, "Папка установки", self.path_edit.text())

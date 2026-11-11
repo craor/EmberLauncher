@@ -45,6 +45,18 @@ def main() -> None:
     if 'APP_VERSION = "' in body:
         raise SystemExit("версия должна задаваться только в launcher.py")
     import launcher
+    import os
+
+    cafile = os.environ.get("SSL_CERT_FILE") or ""
+    if not cafile or not os.path.isfile(cafile):
+        raise SystemExit("нет корневых сертификатов для HTTPS")
+    if "REQUESTS_CA_BUNDLE" not in os.environ:
+        raise SystemExit("requests не увидит сертификаты")
+    ui = (ROOT / "ember_src" / "part_04.py").read_text(encoding="utf-8")
+    if 'MaterialFrame("parchment"' not in ui or 'MaterialFrame("leather"' not in ui:
+        raise SystemExit("панели без кожи и пергамента")
+    if "paint_material" not in (ROOT / "ember_src" / "part_03.py").read_text(encoding="utf-8"):
+        raise SystemExit("текстуры не рисуются")
 
     assert launcher.clean_repo("https://github.com/craor/EmberLauncher.git") == "craor/EmberLauncher"
     assert launcher.clean_repo("javascript:alert(1)") == ""

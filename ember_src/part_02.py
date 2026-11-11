@@ -708,6 +708,16 @@ def open_folder(path: str) -> None:
         subprocess.Popen(["xdg-open", path])
 
 
+def network_error(exc: BaseException) -> str:
+    text = str(exc)
+    if "CERTIFICATE_VERIFY_FAILED" in text or "certificate verify failed" in text:
+        return (
+            "HTTPS не прошёл: у сборки Python на Mac нет корневых сертификатов. "
+            "Скачай новую версию в браузере: https://github.com/craor/EmberLauncher/releases/latest"
+        )
+    return text
+
+
 def http_json(url: str, timeout: int = 30):
     _require_https(url, ALLOWED_HOSTS)
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})

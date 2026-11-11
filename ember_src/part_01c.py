@@ -72,7 +72,7 @@ QProgressBar {
     color: #E7D7B1;
 }
 QProgressBar::chunk { background: #6B8F47; border-radius: 0px; }
-QDialog#downloadDialog { background: #2B1F17; }
+QDialog#downloadDialog { background: transparent; }
 QListWidget {
     background: #E7D7B1;
     color: #2B1F17;
@@ -93,37 +93,32 @@ QLabel#kicker {
     font-size: 12px;
     letter-spacing: 1px;
 }
+QFrame#sideBar, QFrame#centerCard, QFrame#sidePanel, QFrame#footerBar, QFrame#hubCard, QFrame#card {
+    background: transparent;
+    border: none;
+}
+QStackedWidget, QStackedWidget > QWidget, QScrollArea, QScrollArea QWidget#qt_scrollarea_viewport {
+    background: transparent;
+    border: none;
+}
+QFrame#centerCard QLabel#muted, QFrame#centerCard QLabel#newsBody, QFrame#centerCard QLabel#hubBody {
+    color: #3A291C;
+}
+QFrame#centerCard QLabel#hello, QFrame#centerCard QLabel#kicker, QFrame#centerCard QLabel#section, QFrame#centerCard QLabel#ramValue {
+    color: #8A3E12;
+}
 QLabel#chip {
-    background: #3A291C;
-    border: 2px solid #6B8F47;
+    background: transparent;
+    border: 2px solid #1A120C;
     border-radius: 0px;
     padding: 8px 12px;
-    color: #E7D7B1;
+    color: #2B1F17;
     font-weight: 700;
 }
 QLabel#packTarget { color: #E7D7B1; font-size: 13px; font-weight: 700; }
 QLabel#newsBody { color: #E7D7B1; font-size: 13px; }
 QLabel#hubBody { color: #E7D7B1; font-size: 12px; }
-QFrame#sideBar, QFrame#centerCard {
-    background-color: #342419;
-    border: 3px solid #1A120C;
-    border-radius: 2px;
-}
-QFrame#sidePanel {
-    background-color: #3F2E20;
-    border: 3px solid #1A120C;
-    border-radius: 2px;
-}
-QFrame#footerBar {
-    background-color: #2B1F17;
-    border: 3px solid #1A120C;
-    border-radius: 2px;
-}
-QFrame#hubCard {
-    background-color: #3A291C;
-    border: 2px solid #4A3426;
-    border-radius: 2px;
-}
+QFrame#centerCard QCheckBox { color: #3A291C; }
 QWidget#scrollBody, QScrollArea, QStackedWidget, QAbstractScrollArea, QAbstractScrollArea::viewport {
     background: transparent;
     border: none;

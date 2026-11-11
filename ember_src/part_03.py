@@ -121,11 +121,12 @@ class EmberButton(QWidget):
         depth = 4
         painter.fillRect(rect.adjusted(0, depth, 0, 0), edge)
         face_rect = rect.adjusted(0, shift, 0, -(depth - shift))
-        if not paint_tiled(painter, face_rect, "wood" if self._primary else "wood-dark"):
+        texture = "wood" if self._primary else "leather"
+        if not paint_tiled(painter, face_rect, texture):
             painter.fillRect(face_rect, face)
         else:
             tint = QColor(face)
-            tint.setAlpha(40 if self._primary else 50)
+            tint.setAlpha(28 if self._primary else 42)
             painter.fillRect(face_rect, tint)
         nail = QColor("#1A120C")
         painter.fillRect(face_rect.left() + 4, face_rect.top() + 4, 3, 3, nail)
@@ -154,11 +155,12 @@ class EmberButton(QWidget):
             ink = QColor("#6B5A48")
         painter.fillRect(rect, QColor("#1A120C"))
         board = rect.adjusted(0, 0, 0, -3)
-        if not paint_tiled(painter, board, "wood" if self._selected else "wood-dark"):
+        texture = "wood" if self._selected else "leather"
+        if not paint_tiled(painter, board, texture):
             painter.fillRect(board, face)
         else:
             tint = QColor(face)
-            tint.setAlpha(56 if self._selected else 36)
+            tint.setAlpha(40 if self._selected else 48)
             painter.fillRect(board, tint)
         rivet = QColor("#2B1F17") if self._selected else QColor("#E8873A")
         painter.fillRect(rect.left() + 10, rect.center().y() - 4, 8, 8, rivet)
@@ -223,7 +225,7 @@ class InstallWorker(QThread):
             )
             self.succeeded.emit(str(installed))
         except Exception as exc:
-            self.failed.emit(str(exc))
+            self.failed.emit(network_error(exc))
 
 
 class VersionListWorker(QThread):
@@ -239,7 +241,7 @@ class VersionListWorker(QThread):
             os.makedirs(self.directory, exist_ok=True)
             versions = minecraft_launcher_lib.utils.get_available_versions(self.directory)
         except Exception as exc:
-            self.failed.emit(str(exc))
+            self.failed.emit(network_error(exc))
             return
         self.ready.emit(list(versions))
 
@@ -273,7 +275,7 @@ class PackWorker(QThread):
                 sources=self.sources,
             )
         except Exception as exc:
-            self.failed.emit(str(exc))
+            self.failed.emit(network_error(exc))
             return
         self.ready.emit(plan)
 
@@ -291,7 +293,7 @@ class NewsWorker(QThread):
         try:
             notes = github_release_notes(self.repo)
         except Exception as exc:
-            self.failed.emit(str(exc))
+            self.failed.emit(network_error(exc))
         else:
             self.ready.emit(notes)
         try:
@@ -313,7 +315,7 @@ class UpdateCheckWorker(QThread):
         try:
             info = github_update(self.repo, self.current)
         except Exception as exc:
-            self.failed.emit(str(exc))
+            self.failed.emit(network_error(exc))
             return
         self.ready.emit(info or {})
 
@@ -337,7 +339,7 @@ class UpdateDownloadWorker(QThread):
                 os.remove(dest)
             except OSError:
                 pass
-            self.failed.emit(str(exc))
+            self.failed.emit(network_error(exc))
             return
         self.ready.emit(dest)
 
@@ -394,7 +396,7 @@ class ModInstallWorker(QThread):
                 note = ""
             self.succeeded.emit(installed_version + ("\n" + note if note else ""))
         except Exception as exc:
-            self.failed.emit(str(exc))
+            self.failed.emit(network_error(exc))
 
 
 class ModRepairWorker(QThread):
@@ -417,7 +419,7 @@ class ModRepairWorker(QThread):
                 status=lambda text: self.status.emit(text),
             )
         except Exception as exc:
-            self.failed.emit(str(exc))
+            self.failed.emit(network_error(exc))
             return
         self.succeeded.emit(note or "")
 
@@ -460,7 +462,7 @@ class JavaWorker(QThread):
             path = minecraft_launcher_lib.runtime.get_executable_path(self.runtime, self.directory) or ""
             self.succeeded.emit(path)
         except Exception as exc:
-            self.failed.emit(str(exc))
+            self.failed.emit(network_error(exc))
 
 
 class DownloadDialog(QDialog):
@@ -504,6 +506,18 @@ class DownloadDialog(QDialog):
         self._worker.ready.connect(self._on_versions)
         self._worker.failed.connect(self._on_failed)
         self._worker.start()
+
+    def paintEvent(self, event) -> None:
+        del event
+        painter = QPainter(self)
+        paint_material(painter, self.rect(), "leather", 36)
+        painter.end()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.setAutoFillBackground(False)
+        reveal_materials(self)
 
     def chosen_version(self) -> str:
         return self._chosen
@@ -594,26 +608,19 @@ def materialize_texture(name: str) -> str:
 
 
 def texture_stylesheet() -> str:
-    wood = materialize_texture("wood-dark")
     parchment = materialize_texture("parchment")
     leather = materialize_texture("leather")
     rules: list[str] = []
-    if wood:
-        rules.append(
-            "QFrame#sideBar, QFrame#centerCard, QFrame#sidePanel, QFrame#footerBar, "
-            "QFrame#hubCard, QFrame#card, QDialog#downloadDialog {"
-            " background-color: #2B1F17;"
-            f' background-image: url("{wood}"); background-repeat: repeat; background-position: top left; }}'
-        )
     if parchment:
         rules.append(
             "QLineEdit, QComboBox, QListWidget, QComboBox QAbstractItemView, QTextEdit, QPlainTextEdit {"
             " background-color: #E7D7B1;"
-            f' background-image: url("{parchment}"); background-repeat: repeat; }}'
+            f' background-image: url("{parchment}"); background-repeat: repeat; color: #2B1F17; }}'
         )
     if leather:
         rules.append(
             "QLabel#chip {"
+            " background-color: transparent;"
             f' background-image: url("{leather}"); background-repeat: repeat; }}'
         )
     return "\n".join(rules)
@@ -638,6 +645,71 @@ def paint_tiled(painter: QPainter, rect, name: str) -> bool:
         y += height
     painter.restore()
     return True
+
+
+def paint_material(painter: QPainter, rect, texture: str, wash: int = 0) -> None:
+    if not paint_tiled(painter, rect, texture):
+        painter.fillRect(rect, QColor("#2B1F17" if texture != "parchment" else "#E7D7B1"))
+    if wash:
+        color = QColor(232, 214, 176, wash) if texture == "parchment" else QColor(26, 18, 12, wash)
+        painter.fillRect(rect, color)
+
+
+def reveal_materials(root: QWidget) -> None:
+    """Дочерние виджеты не должны закрашивать кожу и пергамент плоским цветом."""
+    keep = (
+        QLineEdit,
+        QComboBox,
+        QListWidget,
+        QProgressBar,
+        QScrollBar,
+        QCheckBox,
+        EmberButton,
+        MaterialFrame,
+        ServerCard,
+        StageBanner,
+    )
+    for widget in [root, *root.findChildren(QWidget)]:
+        if isinstance(widget, keep) or str(widget.objectName() or "") == "chip":
+            continue
+        parent = widget.parentWidget()
+        if isinstance(parent, QAbstractScrollArea) and not isinstance(parent, QScrollArea):
+            continue
+        widget.setAutoFillBackground(False)
+        widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        viewport = getattr(widget, "viewport", None)
+        if not callable(viewport):
+            continue
+        view = viewport()
+        if isinstance(view, QWidget) and isinstance(widget, QScrollArea):
+            view.setAutoFillBackground(False)
+            view.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+
+
+class MaterialFrame(QFrame):
+    """Панель с настоящей текстурой, а не с плоской заливкой из стилей."""
+
+    def __init__(self, texture: str, wash: int = 0, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._texture = texture
+        self._wash = wash
+        self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+
+    def showEvent(self, event) -> None:
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.setAutoFillBackground(False)
+        super().showEvent(event)
+
+    def paintEvent(self, event) -> None:
+        del event
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        painter = QPainter(self)
+        paint_material(painter, self.rect(), self._texture, self._wash)
+        painter.setPen(QPen(QColor("#1A120C"), 3))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(self.rect().adjusted(1, 1, -2, -2))
+        painter.end()
 
 
 def style_mac_titlebar(widget) -> None:
@@ -926,6 +998,18 @@ class PackMenuDialog(QDialog):
         root.addLayout(side, 3)
         if self.pack_list.count():
             self.pack_list.setCurrentRow(0)
+
+    def paintEvent(self, event) -> None:
+        del event
+        painter = QPainter(self)
+        paint_material(painter, self.rect(), "leather", 28)
+        painter.end()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.setAutoFillBackground(False)
+        reveal_materials(self)
 
     def _current_pack(self) -> dict | None:
         item = self.pack_list.currentItem()

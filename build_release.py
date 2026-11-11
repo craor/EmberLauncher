@@ -134,7 +134,15 @@ def main() -> None:
         f"ember_src{sep}ember_src",
         "--collect-all",
         "minecraft_launcher_lib",
+        "--collect-all",
+        "certifi",
     ])
+    try:
+        import certifi
+
+        command.extend(["--add-data", f"{certifi.where()}{sep}."])
+    except Exception as exc:
+        raise SystemExit("Нет certifi, HTTPS на Mac снова сломается. pip install -r requirements.txt") from exc
     if sys.platform != "darwin":
         command.extend(["--collect-all", "PyQt6"])
     command.append("launcher.py")
