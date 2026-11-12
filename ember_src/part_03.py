@@ -12,15 +12,16 @@ class EmberButton(QWidget):
         self._selected = False
         self._hover = 0.0
         self._pressed = False
+        self._glow = 0.0
         self._anim = QVariantAnimation(self)
-        self._anim.setDuration(160)
+        self._anim.setDuration(220)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._anim.valueChanged.connect(self._on_anim)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumHeight(42 if nav else (46 if primary else 34))
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         weight = QFont.Weight.Bold if primary or nav else QFont.Weight.DemiBold
-        family = "Pixelify Sans" if primary else "Alegreya Sans"
+        family = "Alegreya Sans"
         self.setFont(QFont(family, 11 if primary else 10, weight))
         if nav:
             self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -66,6 +67,28 @@ class EmberButton(QWidget):
         self._anim.setEndValue(target)
         self._anim.start()
 
+    def setPulse(self, enabled: bool = True) -> None:
+        previous = getattr(self, "_glow_anim", None)
+        if previous is not None:
+            previous.stop()
+        if not enabled:
+            self._glow = 0.0
+            self.update()
+            return
+        glow = QVariantAnimation(self)
+        glow.setDuration(1500)
+        glow.setStartValue(0.0)
+        glow.setEndValue(1.0)
+        glow.setLoopCount(-1)
+        glow.setEasingCurve(QEasingCurve.Type.InOutSine)
+        glow.valueChanged.connect(self._set_glow)
+        self._glow_anim = glow
+        glow.start()
+
+    def _set_glow(self, value: object) -> None:
+        self._glow = float(value)
+        self.update()
+
     def enterEvent(self, event) -> None:
         if self.isEnabled():
             self._animate_to(1.0)
@@ -98,76 +121,70 @@ class EmberButton(QWidget):
     def paintEvent(self, event) -> None:
         del event
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         if self._nav:
             self._paint_nav(painter)
             painter.end()
             return
-        rect = self.rect().adjusted(1, 1, -2, -2)
+        rect = self.rect().adjusted(2, 2, -3, -3)
         if rect.width() <= 8 or rect.height() <= 8:
             painter.end()
             return
+        if self._pressed and self.isEnabled():
+            rect = rect.adjusted(1, 1, -1, -1)
+        radius = rect.height() / 2
         if self._primary:
-            face = lerp_color(QColor("#E8873A"), QColor("#F2A35C"), self._hover)
-            edge = QColor("#8A3E12")
-            ink = QColor("#2B1F17") if self.isEnabled() else QColor("#6B5A48")
+            face = lerp_color(QColor("#5B4BFF"), QColor("#7A6CFF"), self._hover)
+            ink = QColor("#FFFFFF") if self.isEnabled() else QColor("#D9D6F5")
         else:
-            face = lerp_color(QColor("#4A3426"), QColor("#5C4332"), self._hover)
-            edge = QColor("#1A120C")
-            ink = QColor("#E7D7B1") if self.isEnabled() else QColor("#8A7560")
-        if not self.isEnabled():
-            face = QColor("#3A2C22")
-        shift = 3 if self._pressed and self.isEnabled() else 0
-        depth = 4
-        painter.fillRect(rect.adjusted(0, depth, 0, 0), edge)
-        face_rect = rect.adjusted(0, shift, 0, -(depth - shift))
-        texture = "wood" if self._primary else "leather"
-        if not paint_tiled(painter, face_rect, texture):
-            painter.fillRect(face_rect, face)
-        else:
-            tint = QColor(face)
-            tint.setAlpha(28 if self._primary else 42)
-            painter.fillRect(face_rect, tint)
-        nail = QColor("#1A120C")
-        painter.fillRect(face_rect.left() + 4, face_rect.top() + 4, 3, 3, nail)
-        painter.fillRect(face_rect.right() - 7, face_rect.top() + 4, 3, 3, nail)
+            face = lerp_color(QColor(255, 255, 255, 214), QColor(255, 255, 255, 245), self._hover)
+            ink = QColor("#1B2430") if self.isEnabled() else QColor("#9AA3AE")
+        if not self.isEnabled() and not self._primary:
+            face = QColor(255, 255, 255, 140)
+        painter.setPen(Qt.PenStyle.NoPen)
+        glow = float(getattr(self, "_glow", 0.0) or 0.0)
+        if self._primary and glow:
+            wave = 1.0 - abs((glow * 2.0) - 1.0)
+            painter.setBrush(QColor(91, 75, 255, int(28 + 64 * wave)))
+            painter.drawRoundedRect(rect.adjusted(-3, -2, 4, 6), radius + 4, radius + 4)
+        painter.setBrush(QColor(27, 36, 48, 28))
+        painter.drawRoundedRect(rect.adjusted(0, 3, 0, 1), radius, radius)
+        painter.setBrush(face)
+        painter.setPen(QPen(QColor(255, 255, 255, 230), 1))
+        painter.drawRoundedRect(rect, radius, radius)
         painter.setPen(ink)
         painter.setFont(self.font())
         shown = QFontMetrics(self.font()).elidedText(
-            self._text, Qt.TextElideMode.ElideRight, max(8, face_rect.width() - 16)
+            self._text, Qt.TextElideMode.ElideRight, max(8, rect.width() - 20)
         )
-        painter.drawText(face_rect, Qt.AlignmentFlag.AlignCenter, shown)
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, shown)
         painter.end()
 
     def _paint_nav(self, painter: QPainter) -> None:
-        rect = self.rect().adjusted(2, 2, -2, -2)
+        rect = self.rect().adjusted(2, 4, -2, -4)
+        radius = rect.height() / 2
         if self._selected:
-            face = QColor("#E8873A")
-            ink = QColor("#2B1F17")
+            face = QColor(255, 255, 255, 236)
+            ink = QColor("#1B2430")
         elif self._hover > 0:
-            face = QColor("#5C4332")
-            ink = QColor("#E7D7B1")
+            face = QColor(255, 255, 255, int(150 + 70 * self._hover))
+            ink = QColor("#1B2430")
         else:
-            face = QColor("#3A291C")
-            ink = QColor("#D9C7A0")
+            face = QColor(255, 255, 255, 90)
+            ink = QColor("#3C4654")
         if not self.isEnabled():
-            face = QColor("#2B1F17")
-            ink = QColor("#6B5A48")
-        painter.fillRect(rect, QColor("#1A120C"))
-        board = rect.adjusted(0, 0, 0, -3)
-        texture = "wood" if self._selected else "leather"
-        if not paint_tiled(painter, board, texture):
-            painter.fillRect(board, face)
-        else:
-            tint = QColor(face)
-            tint.setAlpha(40 if self._selected else 48)
-            painter.fillRect(board, tint)
-        rivet = QColor("#2B1F17") if self._selected else QColor("#E8873A")
-        painter.fillRect(rect.left() + 10, rect.center().y() - 4, 8, 8, rivet)
+            face = QColor(255, 255, 255, 60)
+            ink = QColor("#9AA3AE")
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(face)
+        painter.drawRoundedRect(rect, radius, radius)
+        dot = QColor("#5B4BFF") if self._selected else QColor("#C5CDD6")
+        painter.setBrush(dot)
+        painter.drawEllipse(rect.left() + 12, rect.center().y() - 4, 8, 8)
         painter.setPen(ink)
         painter.setFont(self.font())
         painter.drawText(
-            QRectF(rect.left() + 26, rect.top(), rect.width() - 32, rect.height() - 3),
+            QRectF(rect.left() + 28, rect.top(), rect.width() - 36, rect.height()),
             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
             self._text,
         )
@@ -673,22 +690,7 @@ def materialize_texture(name: str) -> str:
 
 
 def texture_stylesheet() -> str:
-    parchment = materialize_texture("parchment")
-    leather = materialize_texture("leather")
-    rules: list[str] = []
-    if parchment:
-        rules.append(
-            "QLineEdit, QComboBox, QListWidget, QComboBox QAbstractItemView, QTextEdit, QPlainTextEdit {"
-            " background-color: #E7D7B1;"
-            f' background-image: url("{parchment}"); background-repeat: repeat; color: #2B1F17; }}'
-        )
-    if leather:
-        rules.append(
-            "QLabel#chip {"
-            " background-color: transparent;"
-            f' background-image: url("{leather}"); background-repeat: repeat; }}'
-        )
-    return "\n".join(rules)
+    return ""
 
 
 def paint_tiled(painter: QPainter, rect, name: str) -> bool:
@@ -725,11 +727,23 @@ def paint_tiled(painter: QPainter, rect, name: str) -> bool:
 
 
 def paint_material(painter: QPainter, rect, texture: str, wash: int = 0) -> None:
-    if not paint_tiled(painter, rect, texture):
-        painter.fillRect(rect, QColor("#2B1F17" if texture != "parchment" else "#E7D7B1"))
+    """Стеклянная карточка. Текстура кожи больше не рисуется, аргумент оставлен для старых вызовов."""
+    del texture
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    body = rect.adjusted(2, 2, -4, -6)
+    radius = 22
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(27, 36, 48, 26))
+    painter.drawRoundedRect(body.adjusted(0, 6, 0, 4), radius, radius)
+    painter.setPen(QPen(QColor(255, 255, 255, 230), 1))
+    painter.setBrush(QColor(255, 255, 255, 214))
+    painter.drawRoundedRect(body, radius, radius)
     if wash:
-        color = QColor(232, 214, 176, wash) if texture == "parchment" else QColor(26, 18, 12, wash)
-        painter.fillRect(rect, color)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(126, 173, 212, min(48, int(wash))))
+        painter.drawRoundedRect(body, radius, radius)
+    painter.restore()
 
 
 def reveal_materials(root: QWidget) -> None:
@@ -763,6 +777,28 @@ def reveal_materials(root: QWidget) -> None:
             view.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
 
 
+def float_in(widget: QWidget, delay_ms: int = 0) -> None:
+    """Карточка проявляется, затем эффект снимается, чтобы текст не мылился."""
+    from PyQt6.QtWidgets import QGraphicsOpacityEffect
+
+    effect = QGraphicsOpacityEffect(widget)
+    effect.setOpacity(0.0)
+    widget.setGraphicsEffect(effect)
+    anim = QPropertyAnimation(effect, b"opacity", widget)
+    anim.setDuration(520)
+    anim.setStartValue(0.0)
+    anim.setEndValue(1.0)
+    anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def _clear() -> None:
+        if widget.graphicsEffect() is effect:
+            widget.setGraphicsEffect(None)
+
+    anim.finished.connect(_clear)
+    widget._ember_float = anim
+    QTimer.singleShot(max(0, int(delay_ms)), anim.start)
+
+
 class MaterialFrame(QFrame):
     """Панель с настоящей текстурой, а не с плоской заливкой из стилей."""
 
@@ -783,14 +819,11 @@ class MaterialFrame(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         painter = QPainter(self)
         paint_material(painter, self.rect(), self._texture, self._wash)
-        painter.setPen(QPen(QColor("#1A120C"), 3))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRect(self.rect().adjusted(1, 1, -2, -2))
         painter.end()
 
 
 def style_mac_titlebar(widget) -> None:
-    """Верхняя полоса macOS — то же тёмное дерево, что и окно, а не белая системная."""
+    """Верхняя полоса macOS в цвет неба, не системная белая и не тёмное дерево."""
     if sys.platform != "darwin":
         return
     try:
@@ -829,9 +862,9 @@ def style_mac_titlebar(widget) -> None:
         color = msg(c_void_p, c_double, c_double, c_double, c_double)(
             objc.objc_getClass(b"NSColor"),
             sel("colorWithCalibratedRed:green:blue:alpha:"),
-            43 / 255,
-            31 / 255,
-            23 / 255,
+            198 / 255,
+            214 / 255,
+            230 / 255,
             1.0,
         )
         if color:
@@ -839,7 +872,7 @@ def style_mac_titlebar(widget) -> None:
         appearance_name = msg(c_void_p, c_char_p)(
             objc.objc_getClass(b"NSString"),
             sel("stringWithUTF8String:"),
-            b"NSAppearanceNameDarkAqua",
+            b"NSAppearanceNameAqua",
         )
         appearance = msg(c_void_p, c_void_p)(
             objc.objc_getClass(b"NSAppearance"),
@@ -861,12 +894,12 @@ class GradientWindow(QWidget):
             {
                 "x": rng.random(),
                 "y": rng.random(),
-                "s": rng.uniform(1.1, 2.8),
-                "v": rng.uniform(0.08, 0.22),
-                "a": rng.randint(50, 150),
-                "drift": rng.uniform(-0.03, 0.03),
+                "s": rng.uniform(14, 46),
+                "v": rng.uniform(0.35, 0.9),
+                "a": rng.randint(22, 58),
+                "drift": rng.uniform(0.0, 6.28),
             }
-            for _ in range(32)
+            for _ in range(16)
         ]
         self._clock = QTimer(self)
         self._clock.timeout.connect(self._advance)
@@ -875,14 +908,10 @@ class GradientWindow(QWidget):
         self.setMouseTracking(True)
 
     def _advance(self) -> None:
-        self._t += 0.033
+        self._t += 0.02
         for ember in self._embers:
-            ember["y"] -= ember["v"] * 0.02
-            ember["x"] += ember["drift"] * 0.02
-            if ember["y"] < -0.04:
-                ember["y"] = 1.04
-                ember["x"] = random.random()
-            ember["x"] = ember["x"] % 1.0
+            ember["x"] = (ember["x"] + math.cos(self._t * ember["v"] + ember["drift"]) * 0.0011) % 1.0
+            ember["y"] = (ember["y"] + math.sin(self._t * ember["v"] + ember["drift"]) * 0.0014) % 1.0
         local = self.mapFromGlobal(QCursor.pos())
         if self.rect().contains(local) and self.width() and self.height():
             self._mouse = (local.x() / self.width(), local.y() / self.height())
@@ -890,6 +919,7 @@ class GradientWindow(QWidget):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        enable_windows_dark_title(int(self.winId()))
         style_mac_titlebar(self)
         QTimer.singleShot(0, lambda: style_mac_titlebar(self))
         QTimer.singleShot(180, lambda: style_mac_titlebar(self))
@@ -897,26 +927,44 @@ class GradientWindow(QWidget):
     def paintEvent(self, event) -> None:
         del event
         painter = QPainter(self)
-        width = self.width()
-        height = self.height()
-        if not paint_tiled(painter, self.rect(), "wood-dark"):
-            painter.fillRect(self.rect(), QColor("#2B1F17"))
-        vignette = QLinearGradient(0, 0, 0, height)
-        vignette.setColorAt(0.0, QColor(18, 12, 8, 90))
-        vignette.setColorAt(0.45, QColor(18, 12, 8, 20))
-        vignette.setColorAt(1.0, QColor(8, 5, 3, 120))
-        painter.fillRect(self.rect(), vignette)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        width = max(1, self.width())
+        height = max(1, self.height())
+        mx, my = getattr(self, "_mouse", (0.5, 0.5))
+        shift_x = (mx - 0.5) * 22
+        shift_y = (my - 0.5) * 12
+        sky = QLinearGradient(0, 0, 0, height)
+        sky.setColorAt(0.0, QColor("#8EB7DE"))
+        sky.setColorAt(0.42, QColor("#D5E4F2"))
+        sky.setColorAt(0.72, QColor("#C3B7AE"))
+        sky.setColorAt(1.0, QColor("#8E857E"))
+        painter.fillRect(self.rect(), sky)
+        ridge = QPainterPath()
+        ridge.moveTo(0, height * 0.58 + shift_y)
+        ridge.quadTo(width * 0.18 + shift_x, height * 0.40 + shift_y, width * 0.36, height * 0.56 + shift_y * 0.4)
+        ridge.quadTo(width * 0.55 - shift_x * 0.3, height * 0.72, width * 0.72, height * 0.48 + shift_y * 0.5)
+        ridge.quadTo(width * 0.86 + shift_x * 0.4, height * 0.34, width, height * 0.52)
+        ridge.lineTo(width, height)
+        ridge.lineTo(0, height)
+        ridge.closeSubpath()
         painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(92, 99, 108, 90))
+        painter.drawPath(ridge)
+        far = QPainterPath()
+        far.moveTo(0, height * 0.70 + shift_y * 0.35)
+        far.quadTo(width * 0.3 - shift_x * 0.5, height * 0.58, width * 0.62, height * 0.74 + shift_y * 0.2)
+        far.quadTo(width * 0.82 + shift_x * 0.2, height * 0.82, width, height * 0.66)
+        far.lineTo(width, height)
+        far.lineTo(0, height)
+        far.closeSubpath()
+        painter.setBrush(QColor(70, 76, 84, 70))
+        painter.drawPath(far)
         for ember in self._embers:
-            x = int(ember["x"] * width)
-            y = int(ember["y"] * height)
-            size = max(2, int(ember["s"]))
-            painter.fillRect(x, y, size, size, QColor(232, 140, 58, ember["a"]))
-        shade = QLinearGradient(0, 0, 0, 56)
-        shade.setColorAt(0.0, QColor(26, 18, 12, 70))
-        shade.setColorAt(1.0, QColor(26, 18, 12, 0))
-        painter.fillRect(0, 0, width, 56, shade)
+            x = ember["x"] * width - shift_x * 0.6
+            y = ember["y"] * height - shift_y * 0.4
+            size = ember["s"]
+            painter.setBrush(QColor(255, 255, 255, ember["a"]))
+            painter.drawEllipse(QRectF(x, y, size, size * 0.72))
         painter.end()
 
 
@@ -1002,19 +1050,15 @@ class ServerCard(QWidget):
     def paintEvent(self, event) -> None:
         del event
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        rect = self.rect().adjusted(1, 1, -2, -2)
-        if not paint_tiled(painter, rect, "wood"):
-            painter.fillRect(rect, QColor("#2B1F17"))
-        inner = rect.adjusted(3, 3, -3, -3)
-        if not paint_tiled(painter, inner, "wood-dark"):
-            painter.fillRect(inner, QColor("#3A291C"))
-        else:
-            painter.fillRect(inner, QColor(26, 18, 12, 36))
-        painter.setPen(QPen(QColor("#1A120C"), 2))
-        painter.drawRect(rect.adjusted(3, 3, -3, -3))
-        painter.fillRect(rect.left() + 8, rect.top() + 8, 4, 4, QColor("#E8873A"))
-        painter.fillRect(rect.right() - 12, rect.top() + 8, 4, 4, QColor("#E8873A"))
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = self.rect().adjusted(2, 2, -4, -6)
+        radius = 22
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(27, 36, 48, 30))
+        painter.drawRoundedRect(rect.adjusted(0, 8, 0, 2), radius, radius)
+        painter.setPen(QPen(QColor(255, 255, 255, int(180 + 50 * abs(math.sin(self._phase)))), 1.4))
+        painter.setBrush(QColor(255, 255, 255, 228))
+        painter.drawRoundedRect(rect, radius, radius)
         painter.end()
 
 

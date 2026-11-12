@@ -10,54 +10,70 @@ class StageBanner(QWidget):
         self._art = stage_pixmap()
         self._version = "Выбери версию"
         self._detail = "Описание появится здесь."
+        self._blend = 1.0
+        self._fade = QVariantAnimation(self)
+        self._fade.setDuration(340)
+        self._fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._fade.valueChanged.connect(self._on_fade)
+
+    def _on_fade(self, value: object) -> None:
+        self._blend = float(value)
+        self.update()
 
     def set_caption(self, version: str, detail: str) -> None:
         self._version = version or "Нет версии"
         self._detail = detail or ""
-        self.update()
+        self._fade.stop()
+        self._fade.setStartValue(0.15)
+        self._fade.setEndValue(1.0)
+        self._fade.start()
 
     def paintEvent(self, event) -> None:
         del event
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
-        rect = self.rect().adjusted(2, 2, -3, -3)
-        painter.fillRect(rect, QColor("#1A120C"))
-        photo = rect.adjusted(6, 6, -6, -6)
-        painter.setClipRect(photo)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        rect = self.rect().adjusted(2, 2, -4, -6)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(rect), 22, 22)
+        painter.setClipPath(path)
+        painter.fillRect(rect, QColor("#D5E4F2"))
+        photo = rect
         if self._art.isNull():
-            painter.fillRect(photo, QColor("#3A291C"))
+            painter.fillRect(photo, QColor("#8EB7DE"))
         else:
             scaled = self._art.scaled(
                 max(1, photo.width()),
                 max(1, photo.height()),
                 Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                Qt.TransformationMode.FastTransformation,
+                Qt.TransformationMode.SmoothTransformation,
             )
             x = photo.left() + (photo.width() - scaled.width()) // 2
             y = photo.top() + (photo.height() - scaled.height()) // 2
             painter.drawPixmap(x, y, scaled)
-        painter.setClipping(False)
-        painter.fillRect(photo.left(), photo.bottom() - 52, photo.width(), 52, QColor(43, 31, 23, 220))
-        painter.setPen(QColor("#E8873A"))
-        painter.setFont(QFont("Pixelify Sans", 14))
+        veil = QLinearGradient(0, photo.top(), 0, photo.bottom())
+        veil.setColorAt(0.0, QColor(18, 28, 42, 70))
+        veil.setColorAt(0.45, QColor(18, 28, 42, 10))
+        veil.setColorAt(1.0, QColor(18, 28, 42, 150))
+        painter.fillRect(photo, veil)
+        blend = max(0.0, min(1.0, getattr(self, "_blend", 1.0)))
+        painter.setPen(QColor(255, 255, 255, int(255 * blend)))
+        painter.setFont(QFont("Alegreya Sans", 26, QFont.Weight.Bold))
         painter.drawText(
-            QRectF(photo.left() + 12, photo.bottom() - 48, photo.width() - 24, 22),
+            QRectF(photo.left() + 18, photo.bottom() - 78, photo.width() - 36, 32),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             self._version,
         )
-        painter.setPen(QColor("#E7D7B1"))
-        painter.setFont(QFont("Alegreya Sans", 10))
+        painter.setPen(QColor(255, 255, 255, int(210 * blend)))
+        painter.setFont(QFont("Alegreya Sans", 11))
         detail = QFontMetrics(painter.font()).elidedText(
-            self._detail, Qt.TextElideMode.ElideRight, max(8, photo.width() - 28)
+            self._detail, Qt.TextElideMode.ElideRight, max(8, photo.width() - 40)
         )
         painter.drawText(
-            QRectF(photo.left() + 12, photo.bottom() - 24, photo.width() - 24, 18),
+            QRectF(photo.left() + 18, photo.bottom() - 42, photo.width() - 36, 22),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             detail,
         )
-        painter.fillRect(rect.left() + 2, rect.top() + 2, 6, 6, QColor("#E8873A"))
-        painter.fillRect(rect.right() - 8, rect.top() + 2, 6, 6, QColor("#E8873A"))
         painter.end()
 
 
@@ -186,12 +202,12 @@ class LauncherWindow(GradientWindow):
         center_layout = QVBoxLayout(center)
         center_layout.setContentsMargins(18, 16, 18, 14)
         center_layout.setSpacing(10)
-        home_kicker = QLabel("HOME")
-        home_kicker.setObjectName("kicker")
-        self.hello = QLabel("ДОБРО ПОЖАЛОВАТЬ")
+        self.home_kicker = QLabel("EMBER")
+        self.home_kicker.setObjectName("kicker")
+        self.hello = QLabel("Новый способ\nиграть")
         self.hello.setObjectName("hello")
         self.hello.setWordWrap(True)
-        center_layout.addWidget(home_kicker)
+        center_layout.addWidget(self.home_kicker)
         center_layout.addWidget(self.hello)
 
         self.pages = QStackedWidget()
@@ -444,6 +460,7 @@ class LauncherWindow(GradientWindow):
         self.play_btn = EmberButton("Играть", primary=True)
         self.play_btn.setMinimumWidth(190)
         self.play_btn.setMinimumHeight(52)
+        self.play_btn.setPulse(True)
         self.play_btn.clicked.connect(lambda: self.play())
         footer_row.addWidget(self.footer_version)
         footer_row.addWidget(self.footer_nick)
@@ -572,6 +589,9 @@ class LauncherWindow(GradientWindow):
         root.addWidget(side)
         root.addWidget(center, 1)
         root.addWidget(right)
+        float_in(side, 30)
+        float_in(center, 90)
+        float_in(right, 160)
         self._show_page(0)
         self._sync_chips()
         self.refresh_versions()
@@ -590,7 +610,7 @@ class LauncherWindow(GradientWindow):
                 self.move(frame.topLeft())
             self.setWindowOpacity(0.0)
             self._fade = QPropertyAnimation(self, b"windowOpacity", self)
-            self._fade.setDuration(320)
+            self._fade.setDuration(480)
             self._fade.setStartValue(0.0)
             self._fade.setEndValue(1.0)
             self._fade.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -607,11 +627,36 @@ class LauncherWindow(GradientWindow):
         return label
 
     def _show_page(self, index: int) -> None:
+        same = self.pages.currentIndex() == index
         self.pages.setCurrentIndex(index)
         for button_index, button in enumerate(self._nav):
             button.setSelected(button_index == index)
         if index == 3 and self._news_worker is None:
             self._load_news()
+        if same:
+            return
+        previous = getattr(self, "_page_anim", None)
+        if previous is not None:
+            previous.stop()
+        self.pages.setGraphicsEffect(None)
+        from PyQt6.QtWidgets import QGraphicsOpacityEffect
+
+        effect = QGraphicsOpacityEffect(self.pages)
+        effect.setOpacity(0.0)
+        self.pages.setGraphicsEffect(effect)
+        anim = QPropertyAnimation(effect, b"opacity", self)
+        anim.setDuration(340)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        def _clear() -> None:
+            if self.pages.graphicsEffect() is effect:
+                self.pages.setGraphicsEffect(None)
+
+        anim.finished.connect(_clear)
+        self._page_anim = anim
+        anim.start()
 
     def _load_news(self) -> None:
         repo = active_update_repo(self._config) or DEFAULT_UPDATE_REPO
@@ -713,7 +758,9 @@ class LauncherWindow(GradientWindow):
 
     def _sync_chips(self, *_args: object) -> None:
         nick = self.nickname() or "Player"
-        self.hello.setText(f"ДОБРО ПОЖАЛОВАТЬ, {nick}!")
+        if getattr(self, "home_kicker", None) is not None:
+            self.home_kicker.setText(nick.upper())
+        self.hello.setText("Новый способ\nиграть")
         self.footer_nick.setText(nick)
         version = self.version_combo.currentText().strip()
         target = self.target_edit.text().strip()

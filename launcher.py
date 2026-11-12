@@ -200,8 +200,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-APP_VERSION = "1.9.1"
-USER_AGENT = "EmberLauncher/1.9.1"
+APP_VERSION = "1.10.0"
+USER_AGENT = "EmberLauncher/1.10.0"
 AUTHOR = "craor"
 DEFAULT_UPDATE_REPO = "craor/EmberLauncher"
 

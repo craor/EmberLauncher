@@ -2852,15 +2852,23 @@ def lerp_color(start: QColor, end: QColor, amount: float) -> QColor:
 
 
 def enable_windows_dark_title(hwnd: int) -> None:
+    """Светлая шапка. Имя старое, чтобы не менять вызовы."""
     if os.name != "nt" or not hwnd:
         return
     try:
         import ctypes
 
-        value = ctypes.c_int(1)
-        ctypes.windll.dwmapi.DwmSetWindowAttribute(
-            ctypes.c_void_p(hwnd), 20, ctypes.byref(value), ctypes.sizeof(value)
-        )
+        def paint(code: int, value: int) -> None:
+            packed = ctypes.c_int(value)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                ctypes.c_void_p(hwnd), code, ctypes.byref(packed), ctypes.sizeof(packed)
+            )
+
+        paint(20, 0)
+        paint(33, 2)
+        paint(34, 0x00F2E4D5)
+        paint(35, 0x00F2E4D5)
+        paint(36, 0x0030241B)
     except Exception:
         return
 
