@@ -1,5 +1,36 @@
 
 
+import time
+
+
+def paint_glass_sheen(painter: QPainter, rect, radius: float, strength: float = 0.7) -> None:
+    """Скользящий блик и светлая кромка, как у жидкого стекла."""
+    if rect.width() <= 4 or rect.height() <= 4:
+        return
+    phase = (time.monotonic() % 4.8) / 4.8
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    clip = QPainterPath()
+    clip.addRoundedRect(QRectF(rect), radius, radius)
+    painter.setClipPath(clip)
+    span = float(rect.width() + rect.height())
+    start_x = rect.left() - rect.width() * 0.55 + span * phase
+    shine = QLinearGradient(start_x, rect.top(), start_x + rect.width() * 0.42, rect.bottom())
+    alpha = int(78 * max(0.2, min(1.0, strength)))
+    shine.setColorAt(0.0, QColor(255, 255, 255, 0))
+    shine.setColorAt(0.46, QColor(255, 255, 255, alpha))
+    shine.setColorAt(1.0, QColor(255, 255, 255, 0))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(shine)
+    painter.drawRect(rect)
+    lip = QLinearGradient(rect.left(), rect.top(), rect.left(), rect.top() + max(10.0, rect.height() * 0.42))
+    lip.setColorAt(0.0, QColor(255, 255, 255, int(120 * strength)))
+    lip.setColorAt(1.0, QColor(255, 255, 255, 0))
+    painter.setBrush(lip)
+    painter.drawRect(rect)
+    painter.restore()
+
+
 class EmberButton(QWidget):
     clicked = pyqtSignal()
 
@@ -150,8 +181,9 @@ class EmberButton(QWidget):
         painter.setBrush(QColor(27, 36, 48, 28))
         painter.drawRoundedRect(rect.adjusted(0, 3, 0, 1), radius, radius)
         painter.setBrush(face)
-        painter.setPen(QPen(QColor(255, 255, 255, 230), 1))
+        painter.setPen(QPen(QColor(255, 255, 255, 220), 1))
         painter.drawRoundedRect(rect, radius, radius)
+        paint_glass_sheen(painter, rect, radius, 0.42 if self._primary else 0.7)
         painter.setPen(ink)
         painter.setFont(self.font())
         shown = QFontMetrics(self.font()).elidedText(
@@ -178,6 +210,7 @@ class EmberButton(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(face)
         painter.drawRoundedRect(rect, radius, radius)
+        paint_glass_sheen(painter, rect, radius, 0.55 if self._selected else 0.28)
         dot = QColor("#5B4BFF") if self._selected else QColor("#C5CDD6")
         painter.setBrush(dot)
         painter.drawEllipse(rect.left() + 12, rect.center().y() - 4, 8, 8)
@@ -222,13 +255,20 @@ class InstallWorker(QThread):
 
         callback = {"setStatus": set_status, "setProgress": set_progress, "setMax": set_max}
         try:
+            patch_minecraft_downloads()
             os.makedirs(self.directory, exist_ok=True)
             if self.loader_id == "vanilla":
                 minecraft_launcher_lib.install.install_minecraft_version(self.version, self.directory, callback=callback)
                 self.succeeded.emit(self.version)
                 return
             if self.loader_id == "optifine":
-                launch_optifine_installer(self.version, self.directory, self.java_path, set_status)
+                minecraft_launcher_lib.install.install_minecraft_version(self.version, self.directory, callback=callback)
+                java = java_for_loader(self.directory, self.version, self.java_path)
+                if not java:
+                    raise RuntimeError(
+                        "Java не найдена. Открой «Установка», нажми «Скачать Java» и скачай OptiFine ещё раз."
+                    )
+                launch_optifine_installer(self.version, self.directory, java, set_status)
                 self.succeeded.emit("")
                 return
             if not hasattr(minecraft_launcher_lib, "mod_loader"):
@@ -242,7 +282,7 @@ class InstallWorker(QThread):
             )
             self.succeeded.emit(str(installed))
         except Exception as exc:
-            self.failed.emit(network_error(exc))
+            self.failed.emit(explain_install_error(exc))
 
 
 class VersionListWorker(QThread):
@@ -727,22 +767,30 @@ def paint_tiled(painter: QPainter, rect, name: str) -> bool:
 
 
 def paint_material(painter: QPainter, rect, texture: str, wash: int = 0) -> None:
-    """Стеклянная карточка. Текстура кожи больше не рисуется, аргумент оставлен для старых вызовов."""
+    """Жидкое стекло: полупрозрачная карточка и бегущий блик. Имя оставлено для старых вызовов."""
     del texture
     painter.save()
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     body = rect.adjusted(2, 2, -4, -6)
-    radius = 22
+    if body.width() <= 8 or body.height() <= 8:
+        painter.restore()
+        return
+    radius = 26
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QColor(27, 36, 48, 26))
-    painter.drawRoundedRect(body.adjusted(0, 6, 0, 4), radius, radius)
-    painter.setPen(QPen(QColor(255, 255, 255, 230), 1))
-    painter.setBrush(QColor(255, 255, 255, 214))
+    painter.setBrush(QColor(255, 255, 255, 42))
+    painter.drawRoundedRect(body.adjusted(0, 10, 2, 6), radius, radius)
+    fill = QLinearGradient(body.left(), body.top(), body.right(), body.bottom())
+    fill.setColorAt(0.0, QColor(255, 255, 255, 208))
+    fill.setColorAt(0.42, QColor(255, 255, 255, 154))
+    fill.setColorAt(1.0, QColor(236, 244, 250, 176))
+    painter.setPen(QPen(QColor(255, 255, 255, 230), 1.3))
+    painter.setBrush(fill)
     painter.drawRoundedRect(body, radius, radius)
     if wash:
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(126, 173, 212, min(48, int(wash))))
+        painter.setBrush(QColor(150, 186, 230, min(42, int(wash))))
         painter.drawRoundedRect(body, radius, radius)
+    paint_glass_sheen(painter, body, radius, 0.9)
     painter.restore()
 
 
@@ -808,6 +856,9 @@ class MaterialFrame(QFrame):
         self._wash = wash
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self._glass_clock = QTimer(self)
+        self._glass_clock.timeout.connect(self.update)
+        self._glass_clock.start(70)
 
     def showEvent(self, event) -> None:
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
@@ -916,6 +967,8 @@ class GradientWindow(QWidget):
         if self.rect().contains(local) and self.width() and self.height():
             self._mouse = (local.x() / self.width(), local.y() / self.height())
         self.update()
+        for button in self.findChildren(EmberButton):
+            button.update()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -939,6 +992,15 @@ class GradientWindow(QWidget):
         sky.setColorAt(0.72, QColor("#C3B7AE"))
         sky.setColorAt(1.0, QColor("#8E857E"))
         painter.fillRect(self.rect(), sky)
+        orb_x = width * (0.18 + 0.62 * (0.5 + 0.5 * math.sin(self._t * 0.35)))
+        orb_y = height * (0.16 + 0.06 * math.cos(self._t * 0.27))
+        orb = QRadialGradient(orb_x, orb_y, max(80.0, width * 0.28))
+        orb.setColorAt(0.0, QColor(255, 255, 255, 170))
+        orb.setColorAt(0.28, QColor(198, 186, 255, 90))
+        orb.setColorAt(1.0, QColor(198, 186, 255, 0))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(orb)
+        painter.drawEllipse(QRectF(orb_x - width * 0.28, orb_y - width * 0.18, width * 0.56, width * 0.36))
         ridge = QPainterPath()
         ridge.moveTo(0, height * 0.58 + shift_y)
         ridge.quadTo(width * 0.18 + shift_x, height * 0.40 + shift_y, width * 0.36, height * 0.56 + shift_y * 0.4)
@@ -1050,15 +1112,7 @@ class ServerCard(QWidget):
     def paintEvent(self, event) -> None:
         del event
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        rect = self.rect().adjusted(2, 2, -4, -6)
-        radius = 22
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(27, 36, 48, 30))
-        painter.drawRoundedRect(rect.adjusted(0, 8, 0, 2), radius, radius)
-        painter.setPen(QPen(QColor(255, 255, 255, int(180 + 50 * abs(math.sin(self._phase)))), 1.4))
-        painter.setBrush(QColor(255, 255, 255, 228))
-        painter.drawRoundedRect(rect, radius, radius)
+        paint_material(painter, self.rect(), "parchment", 16)
         painter.end()
 
 

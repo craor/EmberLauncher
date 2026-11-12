@@ -172,6 +172,7 @@ from PyQt6.QtGui import (
     QPen,
     QPixmap,
     QPolygonF,
+    QRadialGradient,
 )
 from PyQt6.QtWidgets import (
     QApplication,
@@ -200,8 +201,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-APP_VERSION = "1.10.0"
-USER_AGENT = "EmberLauncher/1.10.0"
+APP_VERSION = "1.11.0"
+USER_AGENT = "EmberLauncher/1.11.0"
 AUTHOR = "craor"
 DEFAULT_UPDATE_REPO = "craor/EmberLauncher"
 

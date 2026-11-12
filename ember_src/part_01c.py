@@ -1,10 +1,10 @@
 STYLESHEET = """
 * { font-family: "Alegreya Sans", "Segoe UI", "Arial"; color: #1B2430; }
 QLineEdit, QComboBox {
-    background: rgba(255, 255, 255, 0.92);
+    background: rgba(255, 255, 255, 0.55);
     color: #1B2430;
-    border: 1px solid rgba(255, 255, 255, 0.95);
-    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.82);
+    border-radius: 18px;
     padding: 8px 14px;
     min-height: 20px;
     selection-background-color: #5B4BFF;

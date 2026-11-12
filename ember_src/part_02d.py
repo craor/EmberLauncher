@@ -219,6 +219,221 @@ def runtime_executable(directory: str, component: str) -> str:
     return path if path and os.path.isfile(path) else ""
 
 
+def java_for_loader(directory: str, version_id: str, preferred: str = "") -> str:
+    """Java, которой можно запустить установщик Fabric, Forge или OptiFine."""
+    typed = (preferred or "").strip().strip('"')
+    if typed and os.path.isfile(typed):
+        return typed
+    component, _major = java_requirement(directory, version_id)
+    found = runtime_executable(directory, component)
+    if found:
+        return found
+    return find_best_java(directory)
+
+
+def explain_install_error(exc: BaseException) -> str:
+    """Окно ошибки по-русски, без сырого WinError «файл не найден»."""
+    if isinstance(exc, FileNotFoundError):
+        name = os.path.basename(str(getattr(exc, "filename", "") or "")).lower()
+        if name in {"java", "javaw", "java.exe", "javaw.exe"}:
+            return (
+                "Установщик не нашёл Java. Игра уже могла скачаться, "
+                "но Fabric, Forge, NeoForge и OptiFine без Java не ставятся. "
+                "Открой «Установка», нажми «Скачать Java» и скачай версию ещё раз."
+            )
+        missing = getattr(exc, "filename", None) or str(exc)
+        return (
+            f"Файл не найден: {missing}. "
+            "Скачай эту версию ещё раз: лаунчер докачает только то, чего не хватает."
+        )
+    if isinstance(exc, subprocess.CalledProcessError):
+        detail = exc.stderr or exc.stdout or ""
+        if isinstance(detail, bytes):
+            detail = detail.decode("utf-8", "replace")
+        detail = str(detail).strip()
+        text = (
+            "Установщик модов закрылся с ошибкой. "
+            "Для 1.21 нужна Java 21: вкладка «Установка», «Скачать Java», затем скачай версию ещё раз."
+        )
+        if detail:
+            return text + "\n" + detail[-500:]
+        return text
+    if type(exc).__name__ in {"UnsupportedVersion", "VersionNotFound"}:
+        return (
+            f"Эта сборка загрузчика не подходит к версии {exc}. "
+            "Для 1.21 и новее обычно берут Fabric или NeoForge."
+        )
+    text = str(exc)
+    if "CERTIFICATE_VERIFY_FAILED" in text or "certificate verify failed" in text:
+        return (
+            "HTTPS не прошёл: у сборки Python на Mac нет корневых сертификатов. "
+            "Скачай новую версию в браузере: https://github.com/craor/EmberLauncher/releases/latest"
+        )
+    return text
+
+
+def network_error(exc: BaseException) -> str:
+    return explain_install_error(exc)
+
+
+import time
+
+
+def ensure_download_dir(path: str) -> None:
+    """Папка для файла. Повтор нужен, когда несколько закачек создают её сразу."""
+    folder = os.path.dirname(os.fspath(path))
+    if not folder:
+        return
+    last: BaseException | None = None
+    for _attempt in range(8):
+        try:
+            os.makedirs(folder, exist_ok=True)
+            return
+        except OSError as exc:
+            last = exc
+            time.sleep(0.02)
+    if last is not None:
+        raise last
+
+
+def _stable_download_file(
+    url: str,
+    path: str,
+    callback: dict | None = None,
+    sha1: str | None = None,
+    lzma_compressed: bool | None = False,
+    session: object | None = None,
+    minecraft_directory: str | None = None,
+    overwrite: bool | None = False,
+) -> bool:
+    import minecraft_launcher_lib._helper as helper
+
+    original = helper._ember_original_download
+    last: BaseException | None = None
+    for attempt in range(5):
+        try:
+            ensure_download_dir(str(path))
+            result = original(
+                url,
+                path,
+                callback or {},
+                sha1,
+                lzma_compressed,
+                session,
+                minecraft_directory,
+                overwrite,
+            )
+        except (FileNotFoundError, OSError) as exc:
+            last = exc
+            time.sleep(0.05 * (attempt + 1))
+            continue
+        except Exception as exc:
+            if type(exc).__name__ in {"InvalidChecksum", "RequestException", "ConnectionError", "Timeout", "ChunkedEncodingError"}:
+                last = exc
+                time.sleep(0.08 * (attempt + 1))
+                continue
+            raise
+        if result is False and not os.path.isfile(path):
+            last = FileNotFoundError(2, "не удалось скачать", str(path))
+            time.sleep(0.08 * (attempt + 1))
+            continue
+        return bool(result)
+    if last is not None:
+        raise last
+    raise FileNotFoundError(2, "не удалось скачать", str(path))
+
+
+def _copy_inherited_jar(real_copy, src: str, dst: str, *args: object, **kwargs: object):
+    """Библиотека копирует отсутствующий jar поверх родительского. Разворачиваем."""
+    if not os.path.isfile(src) and os.path.isfile(dst):
+        ensure_download_dir(src)
+        return real_copy(dst, src, *args, **kwargs)
+    return real_copy(src, dst, *args, **kwargs)
+
+
+def patch_minecraft_downloads() -> None:
+    """Чинит гонку папок и поиск Java после закачки Minecraft."""
+    if minecraft_launcher_lib is None:
+        return
+    import minecraft_launcher_lib._helper as helper
+    import minecraft_launcher_lib.install as install_mod
+    import minecraft_launcher_lib.mod_loader as mod_loader_mod
+
+    if not getattr(helper, "_ember_downloads_patched", False):
+        helper._ember_original_download = helper.download_file
+        helper.download_file = _stable_download_file
+        for module_name in (
+            "minecraft_launcher_lib.install",
+            "minecraft_launcher_lib.runtime",
+            "minecraft_launcher_lib.forge",
+            "minecraft_launcher_lib.fabric",
+            "minecraft_launcher_lib.quilt",
+            "minecraft_launcher_lib.mrpack",
+            "minecraft_launcher_lib.mod_loader._forge",
+            "minecraft_launcher_lib.mod_loader._fabric",
+            "minecraft_launcher_lib.mod_loader._neoforge",
+            "minecraft_launcher_lib.mod_loader._quilt",
+        ):
+            try:
+                module = __import__(module_name, fromlist=["download_file"])
+            except Exception:
+                continue
+            if hasattr(module, "download_file"):
+                module.download_file = _stable_download_file
+        real_copy = install_mod.shutil.copyfile
+
+        def copy_inherited_jar(src: str, dst: str, *args: object, **kwargs: object):
+            return _copy_inherited_jar(real_copy, src, dst, *args, **kwargs)
+
+        install_mod.shutil.copyfile = copy_inherited_jar
+        helper._ember_downloads_patched = True
+
+    if getattr(mod_loader_mod.ModLoader, "_ember_install", False):
+        return
+
+    def ember_install(
+        self,
+        minecraft_version: str,
+        minecraft_directory,
+        *,
+        loader_version: str | None = None,
+        callback: dict | None = None,
+        java: str | None = None,
+    ) -> str:
+        from minecraft_launcher_lib.exceptions import UnsupportedVersion, VersionNotFound
+        from minecraft_launcher_lib.install import install_minecraft_version
+        from minecraft_launcher_lib.utils import is_version_valid
+
+        directory = str(minecraft_directory)
+        if callback is None:
+            callback = {}
+        if not is_version_valid(minecraft_version, directory):
+            raise VersionNotFound(minecraft_version)
+        if not self.is_minecraft_version_supported(minecraft_version):
+            raise UnsupportedVersion(minecraft_version)
+        install_minecraft_version(minecraft_version, directory, callback=callback)
+        resolved = java_for_loader(directory, minecraft_version, str(java or ""))
+        if not resolved:
+            component, _major = java_requirement(directory, minecraft_version)
+            if component:
+                minecraft_launcher_lib.runtime.install_jvm_runtime(component, directory, callback=callback)
+                resolved = java_for_loader(directory, minecraft_version, "")
+        if not resolved:
+            raise RuntimeError(
+                "Java не найдена. Версия игры скачалась, но установщик Fabric, Forge или NeoForge её не запускает. "
+                "Открой «Установка», нажми «Скачать Java» и скачай версию ещё раз."
+            )
+        if loader_version is None:
+            loader_version = self.get_latest_loader_version(minecraft_version)
+        self._base.install(minecraft_version, directory, callback, resolved, loader_version)
+        installed_version = self.get_installed_version(minecraft_version, loader_version)
+        install_minecraft_version(installed_version, directory, callback=callback)
+        return installed_version
+
+    mod_loader_mod.ModLoader.install = ember_install
+    mod_loader_mod.ModLoader._ember_install = True
+
+
 def java_major_version(java_path: str) -> int:
     if not java_path or not os.path.isfile(java_path):
         return 0

@@ -278,6 +278,7 @@ def main() -> None:
     app.setApplicationName(APP_NAME)
     app.setWindowIcon(load_app_icon())
     load_ui_fonts()
+    patch_minecraft_downloads()
     app.setStyleSheet(STYLESHEET + "\n" + texture_stylesheet())
     app.setFont(QFont("Alegreya Sans", 11))
     palette = QPalette()

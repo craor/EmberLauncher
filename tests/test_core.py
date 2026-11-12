@@ -241,6 +241,49 @@ def main() -> None:
     packet = launcher.status_request_packet("play.example.com", 25565)
     assert b"play.example.com" in packet and packet.endswith(b"\x01\x00")
     assert launcher.query_server_status("")["ok"] is False
+    import shutil
+
+    java_home = pathlib.Path(tempfile.mkdtemp())
+    import minecraft_launcher_lib.runtime as runtime
+
+    java_bin = (
+        java_home
+        / "runtime"
+        / "java-runtime-delta"
+        / runtime._get_jvm_platform_string()
+        / "java-runtime-delta"
+        / "bin"
+        / "java"
+    )
+    java_bin.parent.mkdir(parents=True)
+    java_bin.write_text("java", encoding="utf-8")
+    assert launcher.java_for_loader(str(java_home), "1.21", "") == str(java_bin)
+    assert launcher.java_for_loader(str(java_home), "1.21", str(java_bin)) == str(java_bin)
+    missing_java = launcher.explain_install_error(FileNotFoundError(2, "Не удается найти указанный файл", "java"))
+    assert "Java" in missing_java
+    missing_asset = launcher.explain_install_error(FileNotFoundError(2, "No such file", str(java_home / "client.jar")))
+    assert "ещё раз" in missing_asset
+    nested = java_home / "assets" / "objects" / "ab" / "hash"
+    launcher.ensure_download_dir(str(nested))
+    assert nested.parent.is_dir()
+    parent_jar = java_home / "1.21.jar"
+    loader_jar = java_home / "fabric.jar"
+    parent_jar.write_bytes(b"vanilla")
+    assert launcher._copy_inherited_jar(shutil.copyfile, str(loader_jar), str(parent_jar))
+    assert loader_jar.read_bytes() == b"vanilla"
+    assert parent_jar.read_bytes() == b"vanilla"
+    launcher.patch_minecraft_downloads()
+    import minecraft_launcher_lib._helper as helper
+    import minecraft_launcher_lib.install as install_mod
+
+    patched = helper.download_file
+    launcher.patch_minecraft_downloads()
+    assert helper.download_file is patched
+    assert install_mod.download_file is patched
+    flipped = java_home / "from-parent.jar"
+    assert not flipped.is_file()
+    install_mod.shutil.copyfile(str(flipped), str(parent_jar))
+    assert flipped.read_bytes() == b"vanilla"
     print("ok")
 
 
